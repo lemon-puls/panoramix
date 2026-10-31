@@ -1,0 +1,27 @@
+/* 全局基础样式：深色为主题默认底色（Naive UI darkTheme 负责组件层） */
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: #18181c;
+  color: rgba(255, 255, 255, 0.9);
+  font-family: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sider-title {
+  padding: 16px;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.placeholder {
+  padding: 0 16px;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 12px;
+}

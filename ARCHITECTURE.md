@@ -30,8 +30,7 @@
 ## 目录结构
 
 ```
-├── main.go            # Wails 启动、资产嵌入
-├── app.go             # （保留给 Wails 模板兼容；逻辑都在 internal/app）
+├── main.go            # Wails 启动、资产嵌入、Emitter 桥接（全仓库唯一 import wails 的 Go 文件）
 ├── wails.json
 ├── internal/
 │   ├── store/         # models / Store 接口 / sqlite 实现 / SecretStore(keyring)
@@ -74,6 +73,8 @@ M3 起追加：`SftpListDir / SftpDownload / SftpUpload / TransferCancel` 等。
 | `monitor:sample` | `{hostId, metrics}` | v0.2，按采样间隔 |
 
 命名规范：事件名与载荷字段全英文小写下划线；新增事件必须先补进本表。
+`internal/*` 不直接 import wails：事件通过 `app.Emitter` 接口注入，
+由 `main.go` 提供 wailsEmitter 桥接实现。
 
 ## 数据模型（v0.1，SQLite schema v1）
 
