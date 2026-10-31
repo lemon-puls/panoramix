@@ -84,7 +84,7 @@ M3 起追加：`SftpListDir / SftpDownload / SftpUpload / TransferCancel` 等。
   last_connected_at, sort, 时间戳
 - `snippets`：id, name, content, sort, 时间戳
 - `settings`：key-value（仅非敏感配置）
-- **密码/passphrase 永不入库**：存 OS keychain（service=`Panorama`，
+- **密码/passphrase 永不入库**：存 OS keychain（service=`Panoramix`，
   account=`host:{id}:password|passphrase`）。keychain 不可用时的主密码 AES-GCM
   回退在 M4 补齐（加密容器文件，主密码经 Argon2id 派生）
 - `known_hosts`：OpenSSH 兼容格式，存于配置目录，供 TOFU 与 x/crypto/ssh/knownhosts 使用

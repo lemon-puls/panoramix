@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"panorama/internal/store"
+	"panoramix/internal/store"
 )
 
 // ---------- 测试替身 ----------

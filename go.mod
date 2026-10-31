@@ -1,4 +1,4 @@
-module panorama
+module panoramix
 
 go 1.27.3
 

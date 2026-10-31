@@ -1,8 +1,8 @@
-# Panorama
+# Panoramix
 
 > 一体化开发者运维客户端 —— SSH 终端 · 系统监控 · 文件传输 · 数据库 · Redis · K3s
 
-**English**: Panorama is an all-in-one open-source desktop client for developers — SSH terminal,
+**English**: Panoramix is an all-in-one open-source desktop client for developers — SSH terminal,
 server monitoring, file transfer, MySQL, Redis and K3s, built with Go + Wails + Vue 3.
 Currently pre-release, under active development.
 
@@ -28,7 +28,7 @@ Currently pre-release, under active development.
 go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
 wails dev      # 开发模式（热重载）
-wails build    # 构建产物 build/bin/Panorama.exe
+wails build    # 构建产物 build/bin/Panoramix.exe
 ```
 
 注意：Windows 产物需在 Windows 上执行 `wails build`（WSL 内可用于跑单元测试与

@@ -2,9 +2,11 @@
 
 ## 项目概况
 
-- 项目名：**Panorama**（一体化开发者运维客户端：SSH 终端 / 系统监控 / SFTP / MySQL / Redis / K3s）
-- 本目录名 `vista` 是历史目录名，仅作为本地路径使用；代码、文档、构建产物一律使用 Panorama
-- Go module 路径暂用 `panorama`，GitHub 仓库建立后统一改为 `github.com/<owner>/panorama`
+- 项目名：**Panoramix**（一体化开发者运维客户端：SSH 终端 / 系统监控 / SFTP / MySQL / Redis / K3s）
+- 本目录名 `vista` 是历史目录名，仅作为本地路径使用；代码、文档、构建产物一律使用 Panoramix
+- 命名沿革：2026-11-01 经重名尽调由 Panorama 更名为 Panoramix（原名与 Palo Alto Networks
+  同名防火墙管理平台冲突，运维人群搜索被淹没；新名尽调结论：风险低，同类零冲突）
+- Go module 路径暂用 `panoramix`，GitHub 仓库建立后统一改为 `github.com/<owner>/panoramix`
 - 产品决策、里程碑与验收标准见 `ROADMAP.md`；架构与模块边界见 `ARCHITECTURE.md`。
   本文件只约束工程规范。
 
@@ -33,7 +35,7 @@
 ## 代码组织
 
 ```
-panorama/
+panoramix/
 ├── main.go  app.go  wails.json
 ├── internal/
 │   ├── store/        # SQLite + keyring（唯一持久化层）

@@ -34,7 +34,7 @@ onMounted(async () => {
         <div class="placeholder">{{ t('app.placeholder') }}</div>
       </n-layout-sider>
       <n-layout-content content-style="padding: 24px;">
-        <h1 class="brand">Panorama</h1>
+        <h1 class="brand">Panoramix</h1>
         <p class="version">{{ t('app.version') }}</p>
         <n-tag :type="bridgeOk ? 'success' : 'warning'" size="large">
           {{ bridgeOk ? t('app.bridgeOk') : t('app.bridgeFail') }}

@@ -10,7 +10,7 @@ import (
 	"log"
 	"strings"
 
-	"panorama/internal/store"
+	"panoramix/internal/store"
 )
 
 // Emitter 后端 → 前端事件推送接口；由 main.go 注入 Wails 实现

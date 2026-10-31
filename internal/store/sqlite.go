@@ -19,7 +19,7 @@ func DefaultPath() string {
 	if err != nil {
 		dir = "." // 极端场景回退当前目录，保证可运行
 	}
-	return filepath.Join(dir, "Panorama", "panorama.db")
+	return filepath.Join(dir, "Panoramix", "panoramix.db")
 }
 
 type sqliteStore struct {

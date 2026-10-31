@@ -11,8 +11,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"panorama/internal/app"
-	"panorama/internal/store"
+	"panoramix/internal/app"
+	"panoramix/internal/store"
 )
 
 //go:embed all:frontend/dist
@@ -51,14 +51,14 @@ func main() {
 	log.Printf("[main] store opened: %s", store.DefaultPath())
 
 	// 凭据走 OS keychain（Windows Credential Manager）
-	secrets := store.NewKeyringSecretStore("Panorama")
+	secrets := store.NewKeyringSecretStore("Panoramix")
 
 	// internal/app 是前端唯一数据入口；事件桥在此注入
 	em := &wailsEmitter{}
 	svc := app.NewService(st, secrets, em)
 
 	if err := wails.Run(&options.App{
-		Title:            "Panorama",
+		Title:            "Panoramix",
 		Width:            1280,
 		Height:           800,
 		MinWidth:         960,

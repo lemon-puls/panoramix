@@ -1,12 +1,12 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "Panorama",
-  "outputfilename": "Panorama",
+  "name": "Panoramix",
+  "outputfilename": "Panoramix",
   "frontend:install": "npm install",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "The Panorama Authors"
+    "name": "The Panoramix Authors"
   }
 }

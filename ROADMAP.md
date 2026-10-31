@@ -6,7 +6,7 @@
 ## 版本策略
 
 - SemVer 0.x；每个里程碑完成即打 tag、发 Release（GitHub Releases + Gitee 镜像说明）
-- v0.1 产物形态：Windows 便携版（单 `Panorama.exe` + zip），不做安装器
+- v0.1 产物形态：Windows 便携版（单 `Panoramix.exe` + zip），不做安装器
 - 每个里程碑单独可用、可发布
 
 ---
