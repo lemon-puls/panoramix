@@ -5,6 +5,8 @@ import vue from '@vitejs/plugin-vue'
 // 此配置同时保证纯浏览器 `npm run dev` 可用（后端桥接缺失时页面优雅降级）
 export default defineConfig({
   plugins: [vue()],
-  server: { port: 5173, strictPort: true },
+  // 5173 是 vite 默认端口，极易被其他项目的 dev server 占用
+  // （且 WSL2 localhost 转发会跨系统占口）；Panoramix 固定用 5240
+  server: { port: 5240, strictPort: true },
   build: { outDir: 'dist', emptyOutDir: true },
 })
