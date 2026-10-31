@@ -13,6 +13,7 @@ import {
   NPopover,
   NSwitch,
   NTag,
+  useMessage,
   zhCN,
 } from 'naive-ui'
 import { IsSessionLogEnabled, Ping, SetSessionLogEnabled } from '../wailsjs/go/app/Service'
