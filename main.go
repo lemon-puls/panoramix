@@ -11,8 +11,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"panoramix/internal/app"
-	"panoramix/internal/store"
+	"github.com/lemon-puls/panoramix/internal/app"
+	"github.com/lemon-puls/panoramix/internal/store"
 )
 
 //go:embed all:frontend/dist

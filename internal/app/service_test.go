@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"panoramix/internal/store"
+	"github.com/lemon-puls/panoramix/internal/store"
 )
 
 // ---------- 测试替身 ----------

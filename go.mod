@@ -1,4 +1,4 @@
-module panoramix
+module github.com/lemon-puls/panoramix
 
 go 1.27.3
 
