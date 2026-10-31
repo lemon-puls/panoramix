@@ -59,7 +59,9 @@
 | `SetHostSecret / DeleteHostSecret / HasHostSecret` | 凭据独立管理（表单"留空=不修改"语义） |
 | `ListSnippets / SaveSnippet / DeleteSnippet` | 片段 CRUD |
 
-M2 起追加：`ConnectHost / CloseSession / WriteSession / ResizeSession`；
+M2 已追加：`ConnectHost(hostId, trustMode)`（trustMode: 空 / `add` / `replace`，
+对应 TOFU 的"信任未知指纹 / 确认指纹变更"二次连接）、`CloseSession /
+WriteSession / ResizeSession / IsSessionLogEnabled / SetSessionLogEnabled`；
 M3 起追加：`SftpListDir / SftpDownload / SftpUpload / TransferCancel` 等。
 
 ### 事件（后端 → 前端，Wails Events）

@@ -13,6 +13,7 @@ import {
   type TreeOption,
 } from 'naive-ui'
 import { useConnectionsStore, type TreeNode } from '../stores/connections'
+import { useTerminalsStore } from '../stores/terminals'
 import * as models from '../../wailsjs/go/models'
 import GroupNameModal from './GroupNameModal.vue'
 import HostFormModal from './HostFormModal.vue'
@@ -22,6 +23,7 @@ const { t } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
 const store = useConnectionsStore()
+const terminals = useTerminalsStore()
 
 const search = ref('')
 const expandedKeys = ref<string[]>([])
@@ -225,9 +227,43 @@ async function onMenuSelect(key: string) {
   }
 }
 
+// 真实连接流程：直连 → TOFU 未知指纹弹窗（信任后 add 重试）→
+// 指纹变更红色警告（明确确认后 replace 重试）→ 其余错误直接提示
+async function tryConnectHost(host: models.store.Host) {
+  if (!host) return
+  const res = await terminals.connect(host)
+  if (res.ok) return
+  if (res.errorCode === 'host_key_unknown') {
+    dialog.warning({
+      title: t('tofu.unknownTitle'),
+      content: t('tofu.unknownContent', { name: host.name, fp: res.fingerprint }),
+      positiveText: t('tofu.trust'),
+      negativeText: t('common.cancel'),
+      onPositiveClick: async () => {
+        const r2 = await terminals.connect(host, 'add')
+        if (!r2.ok) message.error(r2.message || t('terminal.connectFailed'))
+      },
+    })
+    return
+  }
+  if (res.errorCode === 'host_key_changed') {
+    dialog.error({
+      title: t('tofu.changedTitle'),
+      content: t('tofu.changedContent', { name: host.name, fp: res.fingerprint }),
+      positiveText: t('tofu.replaceKey'),
+      negativeText: t('common.cancel'),
+      onPositiveClick: async () => {
+        const r2 = await terminals.connect(host, 'replace')
+        if (!r2.ok) message.error(r2.message || t('terminal.connectFailed'))
+      },
+    })
+    return
+  }
+  message.error(res.message || t('terminal.connectFailed'))
+}
+
 function tryConnect(node: TreeNode) {
-  // M2 提供 SSH 连接；当前占位提示
-  message.info(t('tree.connectLater', { name: node.label }))
+  if (node.kind === 'host' && node.host) void tryConnectHost(node.host)
 }
 
 // ---------- 工具栏 ----------
@@ -293,7 +329,7 @@ function renderSuffix({ option }: { option: TreeOption }) {
         v-for="h in store.recentHosts"
         :key="h.id"
         class="recent-item"
-        @dblclick="tryConnect({ key: `host:${h.id}`, kind: 'host', label: h.name, host: h })"
+        @dblclick="tryConnectHost(h)"
       >
         <span class="recent-name">{{ h.name }}</span>
         <span class="node-addr">{{ h.addr }}</span>

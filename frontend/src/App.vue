@@ -14,9 +14,13 @@ import {
   zhCN,
 } from 'naive-ui'
 import { Ping } from '../wailsjs/go/app/Service'
+import { useTerminalsStore } from './stores/terminals'
 import ConnectionTree from './components/ConnectionTree.vue'
+import SnippetsPanel from './components/SnippetsPanel.vue'
+import TerminalTabs from './components/TerminalTabs.vue'
 
 const { t } = useI18n()
+const terminals = useTerminalsStore()
 const bridgeOk = ref(false)
 
 // M1 验收项：桥接自检，验证 Go ↔ WebView 通道
@@ -35,16 +39,22 @@ onMounted(async () => {
       <n-dialog-provider>
         <n-layout has-sider style="height: 100%">
           <n-layout-sider bordered :width="264">
-            <div class="sider-title">{{ t('app.title') }}</div>
-            <ConnectionTree />
+            <div class="sider-inner">
+              <div class="sider-title">{{ t('app.title') }}</div>
+              <ConnectionTree class="tree-area" />
+              <SnippetsPanel class="snippets-area" />
+            </div>
           </n-layout-sider>
-          <n-layout-content content-style="padding: 24px;">
-            <h1 class="brand">Panoramix</h1>
-            <p class="version">{{ t('app.version') }}</p>
-            <n-tag :type="bridgeOk ? 'success' : 'warning'" size="large">
-              {{ bridgeOk ? t('app.bridgeOk') : t('app.bridgeFail') }}
-            </n-tag>
-            <p class="hint">{{ t('app.m1Hint') }}</p>
+          <n-layout-content content-style="padding: 12px; height: 100%">
+            <TerminalTabs v-if="terminals.tabs.length > 0" />
+            <div v-else class="hero">
+              <h1 class="brand">Panoramix</h1>
+              <p class="version">{{ t('app.version') }}</p>
+              <n-tag :type="bridgeOk ? 'success' : 'warning'" size="large">
+                {{ bridgeOk ? t('app.bridgeOk') : t('app.bridgeFail') }}
+              </n-tag>
+              <p class="hint">{{ t('app.m2Hint') }}</p>
+            </div>
           </n-layout-content>
         </n-layout>
       </n-dialog-provider>
@@ -53,6 +63,26 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.sider-inner {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 2px);
+}
+.tree-area {
+  flex: 1;
+  min-height: 0;
+}
+.snippets-area {
+  flex-shrink: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
 .brand {
   margin: 0 0 4px;
   font-size: 28px;
