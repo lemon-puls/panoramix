@@ -68,7 +68,7 @@ export namespace app {
 	        this.password = source["password"];
 	        this.passphrase = source["passphrase"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
