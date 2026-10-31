@@ -10,27 +10,41 @@ import {
   NLayoutContent,
   NLayoutSider,
   NMessageProvider,
+  NPopover,
+  NSwitch,
   NTag,
   zhCN,
 } from 'naive-ui'
-import { Ping } from '../wailsjs/go/app/Service'
+import { IsSessionLogEnabled, Ping, SetSessionLogEnabled } from '../wailsjs/go/app/Service'
 import { useTerminalsStore } from './stores/terminals'
 import ConnectionTree from './components/ConnectionTree.vue'
 import SnippetsPanel from './components/SnippetsPanel.vue'
 import TerminalTabs from './components/TerminalTabs.vue'
 
 const { t } = useI18n()
+const message = useMessage()
 const terminals = useTerminalsStore()
 const bridgeOk = ref(false)
+const logEnabled = ref(false)
 
-// M1 验收项：桥接自检，验证 Go ↔ WebView 通道
+// M1 验收项：桥接自检；M2：会话日志开关
 onMounted(async () => {
   try {
     bridgeOk.value = (await Ping()) === 'pong'
   } catch {
     bridgeOk.value = false
   }
+  logEnabled.value = await IsSessionLogEnabled().catch(() => false)
 })
+
+async function onToggleLog(on: boolean) {
+  try {
+    await SetSessionLogEnabled(on)
+    message.success(t('common.saved'))
+  } catch (e) {
+    message.error(String(e))
+  }
+}
 </script>
 
 <template>
@@ -40,7 +54,18 @@ onMounted(async () => {
         <n-layout has-sider style="height: 100%">
           <n-layout-sider bordered :width="264">
             <div class="sider-inner">
-              <div class="sider-title">{{ t('app.title') }}</div>
+              <div class="sider-title">
+                <span>{{ t('app.title') }}</span>
+                <n-popover trigger="click" placement="bottom-start">
+                  <template #trigger>
+                    <n-button quaternary size="tiny">⚙</n-button>
+                  </template>
+                  <div class="settings-row">
+                    <span>{{ t('settings.sessionLog') }}</span>
+                    <n-switch v-model:value="logEnabled" size="small" @update:value="onToggleLog" />
+                  </div>
+                </n-popover>
+              </div>
               <ConnectionTree class="tree-area" />
               <SnippetsPanel class="snippets-area" />
             </div>
@@ -67,6 +92,21 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 2px);
+}
+.sider-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 12px 4px;
+  font-weight: 600;
+  font-size: 15px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  font-size: 13px;
 }
 .tree-area {
   flex: 1;

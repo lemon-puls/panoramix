@@ -51,6 +51,9 @@ export default {
     connectFailed: '连接失败',
     authFailed: '认证失败：',
   },
+  settings: {
+    sessionLog: '会话日志（按天落文件）',
+  },
   tofu: {
     unknownTitle: '未知主机指纹',
     unknownContent: '首次连接「{name}」。\n\n服务器指纹：{fp}\n\n请核对后选择是否信任。',
