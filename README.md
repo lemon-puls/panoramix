@@ -34,6 +34,12 @@ wails build    # 构建产物 build/bin/Panoramix.exe
 注意：Windows 产物需在 Windows 上执行 `wails build`（WSL 内可用于跑单元测试与
 `GOOS=windows go build` 编译校验）。
 
+> **跨平台共用此目录（如 Windows + WSL）时**：`node_modules` 里的原生二进制
+> （rollup/esbuild 等）是平台相关的，两侧共用一份会互相覆盖。原则：**哪个平台
+> 构建前端，就先在那个平台 `npm install`**，构建完不要立刻去另一个平台跑前端
+> 构建（Go 侧的 vet/test/build 不受影响）。CI 在独立环境安装，无此问题。
+> 另外 vite dev 固定端口 5240（`frontend/vite.config.ts`），避开默认 5173 的冲突。
+
 ## 下载与安装
 
 v0.1 尚未发布。发布后提供 Windows 便携版（单 exe + zip）。
