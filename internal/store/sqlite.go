@@ -13,13 +13,18 @@ import (
 	_ "modernc.org/sqlite" // 纯 Go SQLite 驱动，无 CGO，Windows 交叉编译友好
 )
 
-// DefaultPath 返回默认数据库文件路径（跟随系统配置目录）
-func DefaultPath() string {
+// ConfigDir 返回应用配置目录（数据库、known_hosts、会话日志都在这里）
+func ConfigDir() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		dir = "." // 极端场景回退当前目录，保证可运行
 	}
-	return filepath.Join(dir, "Panoramix", "panoramix.db")
+	return filepath.Join(dir, "Panoramix")
+}
+
+// DefaultPath 返回默认数据库文件路径（跟随系统配置目录）
+func DefaultPath() string {
+	return filepath.Join(ConfigDir(), "panoramix.db")
 }
 
 type sqliteStore struct {
