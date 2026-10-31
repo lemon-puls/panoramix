@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"log"
+	"path/filepath"
 	"sync"
 
 	"github.com/wailsapp/wails/v2"
@@ -12,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/lemon-puls/panoramix/internal/app"
+	"github.com/lemon-puls/panoramix/internal/ssh"
 	"github.com/lemon-puls/panoramix/internal/store"
 )
 
@@ -55,7 +57,14 @@ func main() {
 
 	// internal/app 是前端唯一数据入口；事件桥在此注入
 	em := &wailsEmitter{}
-	svc := app.NewService(st, secrets, em)
+
+	// SSH 会话管理器：known_hosts 与会话日志放配置目录
+	checker := ssh.NewHostKeyChecker(filepath.Join(store.ConfigDir(), "known_hosts"))
+	mgr := ssh.NewManager(checker, em,
+		filepath.Join(store.ConfigDir(), "known_hosts"),
+		filepath.Join(store.ConfigDir(), "logs"))
+
+	svc := app.NewService(st, secrets, em, mgr)
 
 	if err := wails.Run(&options.App{
 		Title:            "Panoramix",

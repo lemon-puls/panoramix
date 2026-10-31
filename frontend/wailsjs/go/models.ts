@@ -1,5 +1,25 @@
 export namespace app {
 	
+	export class ConnectHostResult {
+	    ok: boolean;
+	    sessionId: string;
+	    errorCode: string;
+	    fingerprint: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConnectHostResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.sessionId = source["sessionId"];
+	        this.errorCode = source["errorCode"];
+	        this.fingerprint = source["fingerprint"];
+	        this.message = source["message"];
+	    }
+	}
 	export class HostInput {
 	    id: string;
 	    groupId: string;
