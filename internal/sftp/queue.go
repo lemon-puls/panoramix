@@ -504,7 +504,7 @@ func (q *Queue) execute(h *taskHandle) error {
 		}
 		transferred, cerr := q.copyWithProgress(h, rf, lf)
 		_ = lf.Close()
-		return finishTransfer(h, resumeFrom, transferred, cerr)
+		return finishTransfer(h, transferred, cerr)
 	}
 
 	if err := sftpMkdirAll(cli, path.Dir(remotePath)); err != nil {
@@ -537,22 +537,22 @@ func (q *Queue) execute(h *taskHandle) error {
 	}
 	transferred, cerr := q.copyWithProgress(h, lf, rf)
 	_ = rf.Close()
-	return finishTransfer(h, resumeFrom, transferred, cerr)
+	return finishTransfer(h, transferred, cerr)
 }
 
-// finishTransfer 校验 size（含续传基数）。
+// finishTransfer 校验 size（transferred 为含续传基数的绝对总进度）。
 // 取消/失败时保留半成品文件——这是断点续传的前提（与 WinSCP 行为一致）：
 // 半成品留在目标处，Retry 或重新上传同文件时按 size 自动续传。
 // 唯一例外：overwrite 覆盖已有文件被取消，原文件已被 TRUNC，保留的半成品
 // 即为仅存内容，同样保留以便续传补全。
-func finishTransfer(h *taskHandle, base, transferred int64, cerr error) error {
+func finishTransfer(h *taskHandle, transferred int64, cerr error) error {
 	if cerr == nil {
 		h.mu.Lock()
-		h.Transferred = base + transferred
+		h.Transferred = transferred
 		want := h.Size
 		h.mu.Unlock()
-		if base+transferred != want {
-			return fmt.Errorf("size mismatch: sent %d want %d", base+transferred, want)
+		if transferred != want {
+			return fmt.Errorf("size mismatch: sent %d want %d", transferred, want)
 		}
 		return nil
 	}
@@ -600,12 +600,16 @@ func renameRemotePath(cli *sftp.Client, p string) string {
 	}
 }
 
-// copyWithProgress 拷贝循环：128KB 分块、非阻塞取消检查、200ms 节流进度与限速统计
+// copyWithProgress 拷贝循环：128KB 分块、非阻塞取消检查、200ms 节流进度与限速统计。
+// total 从 h.Transferred（续传基数）起算并回写——进度显示的必须是"总进度"，
+// 若用本次增量覆盖会让续传任务看起来像从头开始。
 func (q *Queue) copyWithProgress(h *taskHandle, src io.Reader, dst io.Writer) (int64, error) {
 	buf := make([]byte, 128*1024)
-	var total int64
+	h.mu.Lock()
+	total := h.Transferred // 续传基数
+	h.mu.Unlock()
 	last := time.Now()
-	var lastBytes int64
+	lastBytes := total
 	for {
 		if h.canceled() {
 			return total, errCanceled

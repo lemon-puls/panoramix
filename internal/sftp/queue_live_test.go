@@ -85,7 +85,25 @@ type subsystemMsg struct {
 	Name string
 }
 
-var lastServeErr error
+var (
+	lastServeErr   error
+	lastServeBytes int64 // 服务端从客户端收到的字节数（SFTP 载荷，验证续传裁剪传输量）
+)
+
+// countConn 统计客户端 → 服务端方向字节数的包装通道
+type countConn struct {
+	rwc gossh.Channel
+	n   int64
+}
+
+func (c *countConn) Read(p []byte) (int, error) {
+	n, err := c.rwc.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func (c *countConn) Write(p []byte) (int, error) { return c.rwc.Write(p) }
+func (c *countConn) Close() error                { return c.rwc.Close() }
 
 func handleSftpSession(ch gossh.Channel, reqs <-chan *gossh.Request) {
 	defer ch.Close()
@@ -99,12 +117,14 @@ func handleSftpSession(ch gossh.Channel, reqs <-chan *gossh.Request) {
 			}
 			req.Reply(true, nil)
 			// pkg/sftp 纯 Go 服务端：服务真实文件系统（测试只用专属 /tmp 路径）
-			srv, err := sftp.NewServer(ch)
+			cc := &countConn{rwc: ch}
+			srv, err := sftp.NewServer(cc)
 			if err != nil {
 				lastServeErr = fmt.Errorf("new server: %w", err)
 				continue
 			}
 			lastServeErr = srv.Serve()
+			lastServeBytes = cc.n
 			// Serve 退出后立即关通道：让客户端 recv 端立刻 EOF 解除阻塞
 			_ = ch.Close()
 		case "keepalive@openssh.com":
@@ -512,6 +532,13 @@ func TestSftpQueueResume(t *testing.T) {
 	if sha(got) != sha(full) {
 		t.Fatal("resumed remote content mismatch")
 	}
+
+	// 服务端实收字节必须严格小于完整文件大小（本例 ~6MB < 10MB）——
+	// 若实现退化成从头重传，实收将 ≥ 完整大小，该断言直接钉死续传有效性
+	if lastServeBytes <= 0 || lastServeBytes >= int64(len(full)) {
+		t.Fatalf("resume should send less than full file over the wire, server received %d bytes (full=%d)", lastServeBytes, len(full))
+	}
+	t.Logf("resume wire bytes: %d (full would be %d)", lastServeBytes, len(full))
 
 	// 再传一次：目标恰好等大（内容可能不同）→ 进冲突流程由用户决策
 	batchID, err := q.Enqueue("s1", DirUpload, remoteDir, srcPath)
