@@ -16,15 +16,18 @@ import {
 import { Ping } from '../wailsjs/go/app/Service'
 import { useTerminalsStore } from './stores/terminals'
 import { useFilesStore } from './stores/files'
+import { useMonitorPanelStore } from './stores/monitorPanel'
 import ConnectionTree from './components/ConnectionTree.vue'
 import SiderHeader from './components/SiderHeader.vue'
 import SnippetsPanel from './components/SnippetsPanel.vue'
 import TerminalTabs from './components/TerminalTabs.vue'
 import FilePanel from './components/FilePanel.vue'
+import MonitorPanel from './components/MonitorPanel.vue'
 
 const { t } = useI18n()
 const terminals = useTerminalsStore()
 const files = useFilesStore()
+const monitor = useMonitorPanelStore()
 const bridgeOk = ref(false)
 
 // M1 验收项：桥接自检，验证 Go ↔ WebView 通道
@@ -63,6 +66,7 @@ onMounted(async () => {
                 </div>
               </div>
               <FilePanel v-if="files.showPanel && terminals.tabs.length > 0" class="files-area" />
+              <MonitorPanel v-else-if="monitor.showPanel && terminals.tabs.length > 0" class="files-area" />
             </div>
           </n-layout-content>
         </n-layout>

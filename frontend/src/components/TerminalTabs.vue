@@ -3,12 +3,25 @@ import { useI18n } from 'vue-i18n'
 import { NButton, NTabs, NTabPane } from 'naive-ui'
 import { useTerminalsStore } from '../stores/terminals'
 import { useFilesStore } from '../stores/files'
+import { useMonitorPanelStore } from '../stores/monitorPanel'
 import TerminalView from './TerminalView.vue'
 
 // 终端多标签：display-directive="show" 保证切走标签不会销毁 xterm 实例
 const { t } = useI18n()
 const store = useTerminalsStore()
 const files = useFilesStore()
+const monitor = useMonitorPanelStore()
+
+// 右侧面板互斥开关：同一时间只展开一个
+function toggleFiles() {
+  files.showPanel = !files.showPanel
+  if (files.showPanel) monitor.showPanel = false
+}
+
+function toggleMonitor() {
+  monitor.showPanel = !monitor.showPanel
+  if (monitor.showPanel) files.showPanel = false
+}
 </script>
 
 <template>
@@ -34,14 +47,22 @@ const files = useFilesStore()
       <TerminalView :tab="tab" />
     </n-tab-pane>
     <template #suffix>
-      <n-button
-        size="tiny"
-        :type="files.showPanel ? 'primary' : 'default'"
-        class="files-toggle"
-        @click="files.showPanel = !files.showPanel"
-      >
-        {{ t('files.toggle') }}
-      </n-button>
+      <span class="panel-toggles">
+        <n-button
+          size="tiny"
+          :type="files.showPanel ? 'primary' : 'default'"
+          @click="toggleFiles"
+        >
+          {{ t('files.toggle') }}
+        </n-button>
+        <n-button
+          size="tiny"
+          :type="monitor.showPanel ? 'primary' : 'default'"
+          @click="toggleMonitor"
+        >
+          {{ t('monitor.toggle') }}
+        </n-button>
+      </span>
     </template>
   </n-tabs>
 </template>
@@ -57,7 +78,9 @@ const files = useFilesStore()
 .tab-label.error {
   color: #e88080;
 }
-.files-toggle {
+.panel-toggles {
+  display: inline-flex;
+  gap: 4px;
   margin-right: 8px;
 }
 </style>
