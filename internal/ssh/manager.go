@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -88,6 +89,31 @@ func (m *Manager) Client(sessionID string) (*gossh.Client, error) {
 		return nil, errors.New("session not connected")
 	}
 	return s.client, nil
+}
+
+// Run 在指定会话上执行一次性命令并返回输出（监控采集等场景复用会话，
+// 每次调用独立 session channel，与终端 PTY 互不干扰）。
+func (m *Manager) Run(sessionID, cmd string) (string, error) {
+	s, err := m.get(sessionID)
+	if err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	client := s.client
+	s.mu.Unlock()
+	if client == nil {
+		return "", errors.New("session not connected")
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("new session: %w", err)
+	}
+	defer sess.Close()
+	out, err := sess.CombinedOutput(cmd)
+	if err != nil {
+		return string(out), fmt.Errorf("run: %w", err)
+	}
+	return string(out), nil
 }
 
 func (m *Manager) get(id string) (*Session, error) {

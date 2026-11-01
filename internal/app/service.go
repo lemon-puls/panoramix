@@ -8,9 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/lemon-puls/panoramix/internal/monitor"
 	"github.com/lemon-puls/panoramix/internal/sftp"
 	"github.com/lemon-puls/panoramix/internal/ssh"
 	"github.com/lemon-puls/panoramix/internal/store"
@@ -39,12 +42,23 @@ type Service struct {
 	ssh       *ssh.Manager
 	transfers *sftp.Queue
 	dialog    Dialoger
+
+	samplersMu sync.Mutex
+	samplers   map[string]*monitor.Sampler // sessionId → 监控采样器
 }
 
 // NewService 组装服务层
 func NewService(st store.Store, sec store.SecretStore, em Emitter, mgr *ssh.Manager,
 	transfers *sftp.Queue, dlg Dialoger) *Service {
-	return &Service{store: st, secrets: sec, emitter: em, ssh: mgr, transfers: transfers, dialog: dlg}
+	return &Service{
+		store:     st,
+		secrets:   sec,
+		emitter:   em,
+		ssh:       mgr,
+		transfers: transfers,
+		dialog:    dlg,
+		samplers:  map[string]*monitor.Sampler{},
+	}
 }
 
 // Startup 由 Wails 在应用启动时回调
@@ -152,6 +166,7 @@ func (s *Service) ConnectHost(hostID string, trustMode string) ConnectHostResult
 	if terr := s.store.TouchHost(h.ID, time.Now()); terr != nil {
 		log.Printf("[app] touch host failed: %v", terr)
 	}
+	s.startMonitor(h.ID, sessionID)
 	log.Printf("[app] session started: id=%s host=%s", sessionID, h.Name)
 	return ConnectHostResult{Ok: true, SessionId: sessionID}
 }
@@ -169,7 +184,40 @@ func (s *Service) ResizeSession(sessionID string, cols, rows int) error {
 // CloseSession 用户主动断开（关闭终端标签时调用）
 func (s *Service) CloseSession(sessionID string) error {
 	log.Printf("[app] session closing: id=%s", sessionID)
+	s.stopMonitor(sessionID)
 	return s.ssh.Close(sessionID)
+}
+
+// ---------- 系统监控采样 ----------
+
+// startMonitor 启动会话监控采样（间隔可经 settings: monitor_interval_sec 配置，1-60s）
+func (s *Service) startMonitor(hostID, sessionID string) {
+	if s.ssh == nil {
+		return
+	}
+	interval := 2 * time.Second
+	if v, ok, _ := s.store.GetSetting("monitor_interval_sec"); ok {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 60 {
+			interval = time.Duration(n) * time.Second
+		}
+	}
+	sampler := monitor.NewSampler(s.ssh, s.emitter, hostID, sessionID, interval)
+	s.samplersMu.Lock()
+	s.samplers[sessionID] = sampler
+	s.samplersMu.Unlock()
+	go sampler.Start()
+	log.Printf("[monitor] sampler started: host=%s session=%s interval=%v", hostID, sessionID, interval)
+}
+
+// stopMonitor 停止并摘除采样器
+func (s *Service) stopMonitor(sessionID string) {
+	s.samplersMu.Lock()
+	sampler := s.samplers[sessionID]
+	delete(s.samplers, sessionID)
+	s.samplersMu.Unlock()
+	if sampler != nil {
+		sampler.Stop()
+	}
 }
 
 // ---------- 会话日志开关 ----------
