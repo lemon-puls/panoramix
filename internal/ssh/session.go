@@ -179,7 +179,9 @@ func (s *Session) connectOnce() error {
 		gossh.TTY_OP_ISPEED: 115200,
 		gossh.TTY_OP_OSPEED: 115200,
 	}
-	if err := sess.RequestPty("xterm-256color", 80, 24, modes); err != nil {
+	// 注意参数顺序：RequestPty(term, rows, cols)——此前传反导致 PTY 被建成
+	// 80 行×24 列，top 按错误的屏幕模型重画（每帧交错下沉的根因）
+	if err := sess.RequestPty("xterm-256color", 24, 80, modes); err != nil {
 		_ = sess.Close()
 		_ = client.Close()
 		return fmt.Errorf("request pty: %w", err)
@@ -398,7 +400,8 @@ func (s *Session) Resize(cols, rows int) error {
 	if sess == nil {
 		return errors.New("session not connected")
 	}
-	return sess.WindowChange(cols, rows)
+	// WindowChange(h, w)：行在前，同样不能传反
+	return sess.WindowChange(rows, cols)
 }
 
 // ---------- 会话日志 ----------

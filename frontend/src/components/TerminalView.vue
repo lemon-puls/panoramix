@@ -151,10 +151,12 @@ onMounted(() => {
     // 忽略
   }
   term.open(container.value!)
-  fit.fit()
 
+  // 必须先挂 resize 监听再做 fit：首帧 fit 触发的尺寸变化是 PTY 初始
+  // 80x24 → 真实尺寸的第一次同步，注册晚了就会丢失这次 WindowChange
   term.onData((d) => void store.write(props.tab.sessionId, d))
   term.onResize(({ cols, rows }) => void store.resize(props.tab.sessionId, cols, rows))
+  fit.fit()
 
   ro = new ResizeObserver(() => fit.fit())
   ro.observe(container.value!)
