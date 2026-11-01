@@ -62,7 +62,10 @@
 M2 已追加：`ConnectHost(hostId, trustMode)`（trustMode: 空 / `add` / `replace`，
 对应 TOFU 的"信任未知指纹 / 确认指纹变更"二次连接）、`CloseSession /
 WriteSession / ResizeSession / IsSessionLogEnabled / SetSessionLogEnabled`；
-M3 起追加：`SftpListDir / SftpDownload / SftpUpload / TransferCancel` 等。
+M3 已追加：`SftpListDir / SftpHome / SftpMkdir / SftpRemove / SftpRename /
+SftpUpload / SftpDownload / ListTransfers / TransferCancel / TransferRetry /
+SetTransferPolicy / PickUploadFile / PickSavePath / PickDir`（后三个经
+`app.Dialoger` 接口走 Wails 原生对话框）。
 
 ### 事件（后端 → 前端，Wails Events）
 
@@ -71,7 +74,8 @@ M3 起追加：`SftpListDir / SftpDownload / SftpUpload / TransferCancel` 等。
 | `conn:state` | `{hostId, sessionId, state}` | connecting / connected / reconnecting / closed / error |
 | `terminal:output` | `{sessionId, dataB64}` | PTY 读端有数据；**合并发送：≤16ms 一批**（xterm.js write 节流，二进制走 base64 保安全） |
 | `terminal:exit` | `{sessionId, code, reason}` | 会话结束 |
-| `transfer:progress` | `{transferId, state, transferred, total, speedBps}` | 传输队列节流推送（≥200ms 间隔） |
+| `transfer:progress` | `Task` 快照（含 state/speedBps/err） | 传输队列节流推送（≥200ms 间隔）与状态变更 |
+| `transfer:conflict` | `{transferId, batchId, sessionId, direction, name, path, size}` | 目标已存在且批次无记住策略时，任务挂起等待前端决策 |
 | `monitor:sample` | `{hostId, metrics}` | v0.2，按采样间隔 |
 
 命名规范：事件名与载荷字段全英文小写下划线；新增事件必须先补进本表。
