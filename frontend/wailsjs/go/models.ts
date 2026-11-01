@@ -324,3 +324,36 @@ export namespace store {
 
 }
 
+export namespace xshell {
+	
+	export class Preview {
+	    file: string;
+	    name: string;
+	    host: string;
+	    port: number;
+	    username: string;
+	    authType: string;
+	    keyName?: string;
+	    valid: boolean;
+	    skipReason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Preview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.file = source["file"];
+	        this.name = source["name"];
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.username = source["username"];
+	        this.authType = source["authType"];
+	        this.keyName = source["keyName"];
+	        this.valid = source["valid"];
+	        this.skipReason = source["skipReason"];
+	    }
+	}
+
+}
+

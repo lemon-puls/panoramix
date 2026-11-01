@@ -3,6 +3,7 @@
 import {app} from '../models';
 import {store} from '../models';
 import {sftp} from '../models';
+import {xshell} from '../models';
 
 export function CloseSession(arg1:string):Promise<void>;
 
@@ -69,3 +70,7 @@ export function TransferCancel(arg1:string):Promise<void>;
 export function TransferRetry(arg1:string):Promise<void>;
 
 export function WriteSession(arg1:string,arg2:string):Promise<void>;
+
+export function XshellImport(arg1:Array<xshell.Preview>):Promise<number>;
+
+export function XshellScanDir(arg1:string):Promise<Array<xshell.Preview>>;

@@ -14,6 +14,7 @@ import (
 	"github.com/lemon-puls/panoramix/internal/sftp"
 	"github.com/lemon-puls/panoramix/internal/ssh"
 	"github.com/lemon-puls/panoramix/internal/store"
+	"github.com/lemon-puls/panoramix/internal/xshell"
 )
 
 // Emitter 后端 → 前端事件推送接口；由 main.go 注入 Wails 实现
@@ -583,4 +584,51 @@ func (s *Service) PickDir() (string, error) {
 		return "", fmt.Errorf("dialog not ready")
 	}
 	return s.dialog.PickDirectory()
+}
+
+// ---------- Xshell 导入 ----------
+
+// XshellScanDir 扫描 Xshell 会话目录（*.xsh），返回可导入预览列表
+func (s *Service) XshellScanDir(dir string) ([]xshell.Preview, error) {
+	return xshell.ScanDir(dir)
+}
+
+// XshellImport 将选中的有效预览导入为主机（同名同地址去重跳过）。
+// Xshell 的密码/密钥不可迁移：导入的主机无凭据，首次连接时前端引导补录。
+func (s *Service) XshellImport(previews []xshell.Preview) (int, error) {
+	existing, err := s.store.ListHosts()
+	if err != nil {
+		return 0, fmt.Errorf("list hosts: %w", err)
+	}
+	seen := map[string]bool{}
+	for _, h := range existing {
+		seen[h.Name+"|"+h.Addr] = true
+	}
+	imported := 0
+	for _, p := range previews {
+		if !p.Valid {
+			continue
+		}
+		key := p.Name + "|" + p.Host
+		if seen[key] {
+			continue
+		}
+		h := store.Host{
+			Name:          p.Name,
+			Addr:          p.Host,
+			Port:          p.Port,
+			Username:      p.Username,
+			AuthType:      store.AuthType(p.AuthType),
+			KeepaliveSec:  30,
+			AutoReconnect: true,
+		}
+		if err := s.store.SaveHost(&h); err != nil {
+			return imported, fmt.Errorf("save host %s: %w", p.Name, err)
+		}
+		seen[key] = true
+		imported++
+	}
+	// 已存在的同配置主机与无效条目均计入 skipped
+	log.Printf("[app] xshell import: %d imported of %d previews", imported, len(previews))
+	return imported, nil
 }

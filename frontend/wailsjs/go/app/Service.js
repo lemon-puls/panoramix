@@ -133,3 +133,11 @@ export function TransferRetry(arg1) {
 export function WriteSession(arg1, arg2) {
   return window['go']['app']['Service']['WriteSession'](arg1, arg2);
 }
+
+export function XshellImport(arg1) {
+  return window['go']['app']['Service']['XshellImport'](arg1);
+}
+
+export function XshellScanDir(arg1) {
+  return window['go']['app']['Service']['XshellScanDir'](arg1);
+}

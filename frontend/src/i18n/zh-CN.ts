@@ -80,6 +80,21 @@ export default {
     empty: '暂无传输任务',
     resumed: '续传',
   },
+  import: {
+    title: '从 Xshell 导入',
+    pickDir: '选择 Xshell 会话目录',
+    empty: '该目录下没有 .xsh 会话文件',
+    warning:
+      '仅迁移 主机 / 端口 / 用户名 / 认证方式。Xshell 的密码为本机加密存储无法迁移、密钥为专有格式不可直接使用——导入后首次连接时会引导你补录凭据。',
+    noneSelected: '请至少勾选一个有效会话',
+    importBtn: '导入 {n} 项',
+    done: '成功导入 {n} 台主机（已存在的同配置主机会自动跳过）',
+  },
+  passwordModal: {
+    title: '补录「{name}」的凭据',
+    tip: '该主机尚未保存凭据（例如从 Xshell 导入）。填写后立即重试连接。',
+    required: '请输入凭据内容',
+  },
   tofu: {
     unknownTitle: '未知主机指纹',
     unknownContent: '首次连接「{name}」。\n\n服务器指纹：{fp}\n\n请核对后选择是否信任。',

@@ -17,6 +17,8 @@ import { useTerminalsStore } from '../stores/terminals'
 import * as models from '../../wailsjs/go/models'
 import GroupNameModal from './GroupNameModal.vue'
 import HostFormModal from './HostFormModal.vue'
+import ImportModal from './ImportModal.vue'
+import PasswordPromptModal from './PasswordPromptModal.vue'
 
 // 连接管理器：搜索 + 分组树 + 最近连接 + 右键菜单（CRUD/排序/克隆）
 const { t } = useI18n()
@@ -39,6 +41,12 @@ const hostModal = reactive({
   show: false,
   host: null as models.store.Host | null,
   groupId: '',
+})
+const importModal = ref(false)
+const credModal = reactive({
+  show: false,
+  host: null as models.store.Host | null,
+  kind: 'password' as 'password' | 'passphrase',
 })
 
 // ---------- 树 ----------
@@ -259,7 +267,26 @@ async function tryConnectHost(host: models.store.Host) {
     })
     return
   }
+  if (res.errorCode === 'auth_failed') {
+    // 无凭据/凭据错误：引导补录后立即重试（Xshell 导入的主机首次连接的常规路径）
+    const kind = /passphrase/i.test(res.message || '') ? 'passphrase' : 'password'
+    Object.assign(credModal, { show: true, host, kind })
+    return
+  }
   message.error(res.message || t('terminal.connectFailed'))
+}
+
+// 凭据补录保存后自动重连
+async function onCredSaved() {
+  if (!credModal.host) return
+  try {
+    await store.load()
+    const fresh = store.hosts.find((h) => h.id === credModal.host?.id) ?? credModal.host
+    const res = await terminals.connect(fresh)
+    if (!res.ok) message.error(res.message || t('terminal.connectFailed'))
+  } catch (e) {
+    message.error(String(e))
+  }
 }
 
 function tryConnect(node: TreeNode) {
@@ -296,6 +323,7 @@ function renderSuffix({ option }: { option: TreeOption }) {
     <div class="toolbar">
       <n-button size="small" dashed @click="newRootHost">{{ t('tree.newHost') }}</n-button>
       <n-button size="small" dashed @click="newRootGroup">{{ t('tree.newGroup') }}</n-button>
+      <n-button size="small" dashed @click="importModal = true">{{ t('import.title') }}</n-button>
     </div>
     <n-input
       v-model:value="search"
@@ -349,6 +377,13 @@ function renderSuffix({ option }: { option: TreeOption }) {
 
     <GroupNameModal v-model:show="groupModal.show" :group="groupModal.group" :parent-id="groupModal.parentId" />
     <HostFormModal v-model:show="hostModal.show" :host="hostModal.host" :group-id="hostModal.groupId" />
+    <ImportModal v-model:show="importModal" @imported="() => void store.load()" />
+    <PasswordPromptModal
+      v-model:show="credModal.show"
+      :host="credModal.host"
+      :kind="credModal.kind"
+      @saved="onCredSaved"
+    />
   </div>
 </template>
 
