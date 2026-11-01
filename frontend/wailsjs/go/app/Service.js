@@ -42,8 +42,24 @@ export function ListSnippets() {
   return window['go']['app']['Service']['ListSnippets']();
 }
 
+export function ListTransfers() {
+  return window['go']['app']['Service']['ListTransfers']();
+}
+
 export function Ping() {
   return window['go']['app']['Service']['Ping']();
+}
+
+export function PickDir() {
+  return window['go']['app']['Service']['PickDir']();
+}
+
+export function PickSavePath(arg1) {
+  return window['go']['app']['Service']['PickSavePath'](arg1);
+}
+
+export function PickUploadFile() {
+  return window['go']['app']['Service']['PickUploadFile']();
 }
 
 export function ResizeSession(arg1, arg2, arg3) {
@@ -68,6 +84,46 @@ export function SetHostSecret(arg1, arg2, arg3) {
 
 export function SetSessionLogEnabled(arg1) {
   return window['go']['app']['Service']['SetSessionLogEnabled'](arg1);
+}
+
+export function SetTransferPolicy(arg1, arg2, arg3) {
+  return window['go']['app']['Service']['SetTransferPolicy'](arg1, arg2, arg3);
+}
+
+export function SftpDownload(arg1, arg2, arg3) {
+  return window['go']['app']['Service']['SftpDownload'](arg1, arg2, arg3);
+}
+
+export function SftpHome(arg1) {
+  return window['go']['app']['Service']['SftpHome'](arg1);
+}
+
+export function SftpListDir(arg1, arg2) {
+  return window['go']['app']['Service']['SftpListDir'](arg1, arg2);
+}
+
+export function SftpMkdir(arg1, arg2) {
+  return window['go']['app']['Service']['SftpMkdir'](arg1, arg2);
+}
+
+export function SftpRemove(arg1, arg2) {
+  return window['go']['app']['Service']['SftpRemove'](arg1, arg2);
+}
+
+export function SftpRename(arg1, arg2, arg3) {
+  return window['go']['app']['Service']['SftpRename'](arg1, arg2, arg3);
+}
+
+export function SftpUpload(arg1, arg2, arg3) {
+  return window['go']['app']['Service']['SftpUpload'](arg1, arg2, arg3);
+}
+
+export function TransferCancel(arg1) {
+  return window['go']['app']['Service']['TransferCancel'](arg1);
+}
+
+export function TransferRetry(arg1) {
+  return window['go']['app']['Service']['TransferRetry'](arg1);
 }
 
 export function WriteSession(arg1, arg2) {

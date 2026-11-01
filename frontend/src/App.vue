@@ -15,13 +15,16 @@ import {
 } from 'naive-ui'
 import { Ping } from '../wailsjs/go/app/Service'
 import { useTerminalsStore } from './stores/terminals'
+import { useFilesStore } from './stores/files'
 import ConnectionTree from './components/ConnectionTree.vue'
 import SiderHeader from './components/SiderHeader.vue'
 import SnippetsPanel from './components/SnippetsPanel.vue'
 import TerminalTabs from './components/TerminalTabs.vue'
+import FilePanel from './components/FilePanel.vue'
 
 const { t } = useI18n()
 const terminals = useTerminalsStore()
+const files = useFilesStore()
 const bridgeOk = ref(false)
 
 // M1 验收项：桥接自检，验证 Go ↔ WebView 通道
@@ -47,14 +50,19 @@ onMounted(async () => {
             </div>
           </n-layout-sider>
           <n-layout-content content-style="padding: 12px; height: 100%">
-            <TerminalTabs v-if="terminals.tabs.length > 0" />
-            <div v-else class="hero">
-              <h1 class="brand">Panoramix</h1>
-              <p class="version">{{ t('app.version') }}</p>
-              <n-tag :type="bridgeOk ? 'success' : 'warning'" size="large">
-                {{ bridgeOk ? t('app.bridgeOk') : t('app.bridgeFail') }}
-              </n-tag>
-              <p class="hint">{{ t('app.m2Hint') }}</p>
+            <div class="content-row">
+              <div class="term-area">
+                <TerminalTabs v-if="terminals.tabs.length > 0" />
+                <div v-else class="hero">
+                  <h1 class="brand">Panoramix</h1>
+                  <p class="version">{{ t('app.version') }}</p>
+                  <n-tag :type="bridgeOk ? 'success' : 'warning'" size="large">
+                    {{ bridgeOk ? t('app.bridgeOk') : t('app.bridgeFail') }}
+                  </n-tag>
+                  <p class="hint">{{ t('app.m2Hint') }}</p>
+                </div>
+              </div>
+              <FilePanel v-if="files.showPanel && terminals.tabs.length > 0" class="files-area" />
             </div>
           </n-layout-content>
         </n-layout>
@@ -68,6 +76,21 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 2px);
+}
+.content-row {
+  display: flex;
+  gap: 8px;
+  height: 100%;
+}
+.term-area {
+  flex: 1;
+  min-width: 0;
+}
+.files-area {
+  width: 340px;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
 }
 .tree-area {
   flex: 1;

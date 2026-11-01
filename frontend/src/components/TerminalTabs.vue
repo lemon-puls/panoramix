@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { NTabs, NTabPane } from 'naive-ui'
+import { NButton, NTabs, NTabPane } from 'naive-ui'
 import { useTerminalsStore } from '../stores/terminals'
+import { useFilesStore } from '../stores/files'
 import TerminalView from './TerminalView.vue'
 
 // 终端多标签：display-directive="show" 保证切走标签不会销毁 xterm 实例
 const { t } = useI18n()
 const store = useTerminalsStore()
+const files = useFilesStore()
 </script>
 
 <template>
@@ -31,7 +33,16 @@ const store = useTerminalsStore()
       </template>
       <TerminalView :tab="tab" />
     </n-tab-pane>
-    <template #suffix>&nbsp;</template>
+    <template #suffix>
+      <n-button
+        size="tiny"
+        :type="files.showPanel ? 'primary' : 'default'"
+        class="files-toggle"
+        @click="files.showPanel = !files.showPanel"
+      >
+        {{ t('files.toggle') }}
+      </n-button>
+    </template>
   </n-tabs>
 </template>
 
@@ -45,5 +56,8 @@ const store = useTerminalsStore()
 }
 .tab-label.error {
   color: #e88080;
+}
+.files-toggle {
+  margin-right: 8px;
 }
 </style>
