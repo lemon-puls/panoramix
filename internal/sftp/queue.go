@@ -504,7 +504,7 @@ func (q *Queue) execute(h *taskHandle) error {
 		}
 		transferred, cerr := q.copyWithProgress(h, rf, lf)
 		_ = lf.Close()
-		return finishTransfer(h, direction, localPath, remotePath, existed, cli, resumeFrom, transferred, cerr)
+		return finishTransfer(h, resumeFrom, transferred, cerr)
 	}
 
 	if err := sftpMkdirAll(cli, path.Dir(remotePath)); err != nil {
@@ -537,12 +537,15 @@ func (q *Queue) execute(h *taskHandle) error {
 	}
 	transferred, cerr := q.copyWithProgress(h, lf, rf)
 	_ = rf.Close()
-	return finishTransfer(h, direction, localPath, remotePath, existed, cli, resumeFrom, transferred, cerr)
+	return finishTransfer(h, resumeFrom, transferred, cerr)
 }
 
-// finishTransfer 校验 size（含续传基数）、处理取消清理（不动用户已存在的原文件）。
-// existed 为"拷贝开始时目标是否存在"——续传/重命名后为 false，取消时才清理该目标。
-func finishTransfer(h *taskHandle, direction, localPath, remotePath string, existed bool, cli *sftp.Client, base, transferred int64, cerr error) error {
+// finishTransfer 校验 size（含续传基数）。
+// 取消/失败时保留半成品文件——这是断点续传的前提（与 WinSCP 行为一致）：
+// 半成品留在目标处，Retry 或重新上传同文件时按 size 自动续传。
+// 唯一例外：overwrite 覆盖已有文件被取消，原文件已被 TRUNC，保留的半成品
+// 即为仅存内容，同样保留以便续传补全。
+func finishTransfer(h *taskHandle, base, transferred int64, cerr error) error {
 	if cerr == nil {
 		h.mu.Lock()
 		h.Transferred = base + transferred
@@ -558,17 +561,7 @@ func finishTransfer(h *taskHandle, direction, localPath, remotePath string, exis
 	}
 	h.mu.Lock()
 	h.State = StateCanceled
-	want := h.Size
 	h.mu.Unlock()
-	if want != 0 || transferred != 0 {
-		if !existed {
-			if direction == DirDownload {
-				_ = os.Remove(localPath)
-			} else {
-				_ = cli.Remove(remotePath)
-			}
-		}
-	}
 	return errCanceled
 }
 

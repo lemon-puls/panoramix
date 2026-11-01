@@ -273,7 +273,8 @@ func TestSftpQueueRoundtrip(t *testing.T) {
 	}
 }
 
-func TestSftpQueueCancelCleansPartial(t *testing.T) {
+// TestSftpQueueCancelKeepsPartialRetryResumes 取消保留断点，Retry 自动续传。
+func TestSftpQueueCancelKeepsPartialRetryResumes(t *testing.T) {
 	port, closeSrv := startSftpSSHD(t)
 	defer closeSrv()
 	cli := dialTestClient(t, port)
@@ -288,27 +289,29 @@ func TestSftpQueueCancelCleansPartial(t *testing.T) {
 	for i := range big {
 		big[i] = byte(i % 251)
 	}
+	wantSum := sha(big)
 	bigPath := filepath.Join(local, "huge.bin")
 	if err := os.WriteFile(bigPath, big, 0o600); err != nil {
 		t.Fatalf("write local: %v", err)
 	}
 	remoteDir := filepath.Join(root, "up")
+	remoteBig := filepath.Join(remoteDir, "huge.bin")
+
 	batchID, err := q.Enqueue("s1", DirUpload, remoteDir, bigPath)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	_ = batchID
-	remoteBig := filepath.Join(remoteDir, "huge.bin")
 
-	// 等它进入 running 再取消
+	// 等它进入 running 且已传出至少 1MB 再取消（保证断点非空）
 	waitFor(t, 10*time.Second, func() bool {
 		for _, tk := range q.Tasks() {
-			if tk.State == StateRunning {
+			if tk.State == StateRunning && tk.Transferred >= 1*1024*1024 {
 				return true
 			}
 		}
 		return false
-	}, "task running")
+	}, "task running with >=1MB transferred")
 	var taskID string
 	for _, tk := range q.Tasks() {
 		taskID = tk.ID
@@ -325,9 +328,34 @@ func TestSftpQueueCancelCleansPartial(t *testing.T) {
 		return false
 	}, "task canceled")
 
-	// 半成品应被清理（目标原本不存在）
-	if _, err := sftpWaitStat(cli, remoteBig, 2*time.Second); err == nil {
-		t.Fatal("partial remote file should be removed after cancel")
+	// 断点必须保留（这正是续传的前提）
+	fi, err := os.Stat(remoteBig)
+	if err != nil {
+		t.Fatalf("partial must be kept after cancel: %v", err)
+	}
+	if fi.Size() <= 0 || fi.Size() >= int64(len(big)) {
+		t.Fatalf("partial size unexpected: %d", fi.Size())
+	}
+
+	// Retry → 从断点续传到完成
+	if err := q.Retry(taskID); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	waitFor(t, 60*time.Second, func() bool {
+		for _, tk := range q.Tasks() {
+			if tk.ID == taskID && tk.State == StateDone && tk.Resumed {
+				return true
+			}
+		}
+		return false
+	}, "retry resumed to done")
+
+	got, err := os.ReadFile(remoteBig)
+	if err != nil {
+		t.Fatalf("read remote: %v", err)
+	}
+	if sha(got) != wantSum {
+		t.Fatal("resumed content mismatch")
 	}
 }
 
