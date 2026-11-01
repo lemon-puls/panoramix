@@ -114,7 +114,7 @@ async function onMenuSelect(key: string) {
           title: t('tree.deleteTitle'),
           content: entry.isDir
             ? t('files.deleteDirConfirm', { name: entry.name })
-            : t('tree.deleteHostConfirm').replace(/主机/, '文件'),
+            : t('files.deleteFileConfirm', { name: entry.name }),
           positiveText: t('common.delete'),
           negativeText: t('common.cancel'),
           onPositiveClick: async () => {
@@ -266,9 +266,17 @@ function fmtMtime(v: unknown): string {
           size="tiny"
           type="primary"
           :disabled="!connected"
-          @click="sessionId && files.upload(sessionId, files.cwd)"
+          @click="sessionId && files.uploadFiles(sessionId, files.cwd)"
         >
           {{ t('files.upload') }}
+        </n-button>
+        <n-button
+          size="tiny"
+          type="primary"
+          :disabled="!connected"
+          @click="sessionId && files.uploadDir(sessionId, files.cwd)"
+        >
+          {{ t('files.uploadDir') }}
         </n-button>
       </div>
     </div>
@@ -302,7 +310,9 @@ function fmtMtime(v: unknown): string {
         <div v-for="tk in sessionTasks.slice(0, 20)" :key="tk.transferId" class="trow">
           <div class="tline">
             <span class="tdir">{{ tk.direction === 'upload' ? '↑' : '↓' }}</span>
-            <span class="tname" :title="tk.remotePath">{{ tk.name }}</span>
+            <span class="tname" :title="tk.remotePath">
+              {{ tk.name }}<span v-if="tk.resumed" class="tresume">{{ t('transfers.resumed') }}</span>
+            </span>
             <span class="tsize">{{ formatSize(tk.transferred) }}/{{ formatSize(tk.size) }}</span>
             <span class="tspeed">{{ tk.state === 'running' ? formatSize(Math.round(tk.speedBps)) + '/s' : '' }}</span>
             <span class="tstate" :class="tk.state">{{ tk.state }}</span>
@@ -501,6 +511,11 @@ function fmtMtime(v: unknown): string {
 .tstate.canceled,
 .tstate.skipped {
   opacity: 0.5;
+}
+.tresume {
+  margin-left: 4px;
+  font-size: 10px;
+  color: #f0c674;
 }
 .tops {
   width: 16px;

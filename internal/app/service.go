@@ -25,6 +25,7 @@ type Emitter interface {
 // Dialoger 原生文件对话框（由 main 注入 Wails 实现；internal/* 不 import wails）
 type Dialoger interface {
 	PickOpenFile() (string, error)
+	PickOpenFiles() ([]string, error)
 	PickSavePath(defaultName string) (string, error)
 	PickDirectory() (string, error)
 }
@@ -558,6 +559,14 @@ func (s *Service) PickUploadFile() (string, error) {
 		return "", fmt.Errorf("dialog not ready")
 	}
 	return s.dialog.PickOpenFile()
+}
+
+// PickUploadFiles 打开"选择文件"多选对话框，返回本地路径列表
+func (s *Service) PickUploadFiles() ([]string, error) {
+	if s.dialog == nil {
+		return nil, fmt.Errorf("dialog not ready")
+	}
+	return s.dialog.PickOpenFiles()
 }
 
 // PickSavePath 打开"另存为"对话框（默认文件名取自远程文件），返回本地路径

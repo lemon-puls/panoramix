@@ -21,6 +21,7 @@ export interface TransferTask {
   transferred: number
   state: string // pending|running|done|skipped|canceled|failed|awaiting_policy
   speedBps: number
+  resumed?: boolean
   err?: string
 }
 

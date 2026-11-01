@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/creack/pty v1.1.24
+	github.com/pkg/sftp v1.13.12
 	github.com/wailsapp/wails/v2 v2.17.0
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.54.0
@@ -33,7 +34,6 @@ require (
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pkg/sftp v1.13.12 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/samber/lo v1.49.1 // indirect

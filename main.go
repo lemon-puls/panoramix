@@ -61,6 +61,12 @@ func (d *wailsDialoger) PickOpenFile() (string, error) {
 	})
 }
 
+func (d *wailsDialoger) PickOpenFiles() ([]string, error) {
+	return runtime.OpenMultipleFilesDialog(d.em.Ctx(), runtime.OpenDialogOptions{
+		Title: "选择要上传的文件（可多选）",
+	})
+}
+
 func (d *wailsDialoger) PickSavePath(defaultName string) (string, error) {
 	return runtime.SaveFileDialog(d.em.Ctx(), runtime.SaveDialogOptions{
 		Title:           "选择保存位置",
@@ -108,9 +114,15 @@ func main() {
 		MinHeight:        600,
 		AssetServer:      &assetserver.Options{Assets: assets},
 		BackgroundColour: &options.RGBA{R: 24, G: 24, B: 28, A: 1}, // 深色底，避免启动白屏闪烁
-		OnStartup:        svc.Startup,
-		OnShutdown:       svc.Shutdown,
-		Bind:             []interface{}{svc},
+		// 文件拖放：未启用时 OnFileDrop 永远不触发（M3 拖拽上传依赖此项）
+		DragAndDrop: &options.DragAndDrop{
+			EnableFileDrop:     true,
+			DisableWebViewDrop: true, // 防止 webview 默认行为（拖入文件被直接打开）
+			CSSDropProperty:    "--wails-drop-target",
+		},
+		OnStartup:  svc.Startup,
+		OnShutdown: svc.Shutdown,
+		Bind:       []interface{}{svc},
 	}); err != nil {
 		log.Fatalf("[main] wails run failed: %v", err)
 	}

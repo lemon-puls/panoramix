@@ -56,6 +56,7 @@ type Task struct {
 	Transferred int64   `json:"transferred"`
 	State       string  `json:"state"`
 	SpeedBps    float64 `json:"speedBps"`
+	Resumed     bool    `json:"resumed,omitempty"` // 从断点续传
 	Err         string  `json:"err,omitempty"`
 }
 
@@ -387,6 +388,30 @@ func (q *Queue) execute(h *taskHandle) error {
 	h.targetExisted = existed
 	h.mu.Unlock()
 
+	// ---- 断点续传检测（无显式批次策略时）----
+	// 目标存在且比源小 → 视为断点续传（按 size 续，业界通行做法）；
+	// 等大或更大 → 进冲突流程由用户决策（内容可能不同，静默跳过有丢数据风险）。
+	resumeFrom := int64(0)
+	if existed && q.policyFor(h.BatchID) == "" && want > 0 {
+		var targetSize int64
+		if direction == DirDownload {
+			if fi, serr := os.Stat(localPath); serr == nil {
+				targetSize = fi.Size()
+			}
+		} else {
+			if fi, serr := cli.Stat(remotePath); serr == nil && !fi.IsDir() {
+				targetSize = fi.Size()
+			}
+		}
+		if targetSize > 0 && targetSize < want {
+			resumeFrom = targetSize
+			existed = false // 视为新传输（不进冲突流程、取消时不清理目标）
+			h.mu.Lock()
+			h.Resumed = true
+			h.mu.Unlock()
+		}
+	}
+
 	// ---- 冲突策略 ----
 	if existed {
 		policy := q.policyFor(h.BatchID)
@@ -442,6 +467,7 @@ func (q *Queue) execute(h *taskHandle) error {
 					remotePath = newPath
 					h.mu.Unlock()
 				}
+				existed = false // 新目标不存在：取消时可安全清理半成品
 			}
 		}
 	}
@@ -456,13 +482,29 @@ func (q *Queue) execute(h *taskHandle) error {
 			return fmt.Errorf("open remote: %w", err)
 		}
 		defer rf.Close()
-		lf, err := os.OpenFile(localPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		lfFlags := os.O_CREATE | os.O_WRONLY
+		if resumeFrom == 0 {
+			lfFlags |= os.O_TRUNC
+		}
+		lf, err := os.OpenFile(localPath, lfFlags, 0o600)
 		if err != nil {
 			return fmt.Errorf("create local: %w", err)
 		}
+		if resumeFrom > 0 {
+			// 双端都 Seek 到断点（本地文件与远程流）
+			if _, serr := lf.Seek(resumeFrom, io.SeekStart); serr != nil {
+				return fmt.Errorf("seek local: %w", serr)
+			}
+			if _, serr := rf.Seek(resumeFrom, io.SeekStart); serr != nil {
+				return fmt.Errorf("seek remote: %w", serr)
+			}
+			h.mu.Lock()
+			h.Transferred = resumeFrom
+			h.mu.Unlock()
+		}
 		transferred, cerr := q.copyWithProgress(h, rf, lf)
 		_ = lf.Close()
-		return finishTransfer(h, direction, localPath, remotePath, existed, cli, transferred, cerr)
+		return finishTransfer(h, direction, localPath, remotePath, existed, cli, resumeFrom, transferred, cerr)
 	}
 
 	if err := sftpMkdirAll(cli, path.Dir(remotePath)); err != nil {
@@ -473,24 +515,41 @@ func (q *Queue) execute(h *taskHandle) error {
 		return fmt.Errorf("open local: %w", err)
 	}
 	defer lf.Close()
-	rf, err := cli.OpenFile(remotePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	rfFlags := os.O_WRONLY | os.O_CREATE
+	if resumeFrom == 0 {
+		rfFlags |= os.O_TRUNC
+	}
+	rf, err := cli.OpenFile(remotePath, rfFlags)
 	if err != nil {
 		return fmt.Errorf("create remote: %w", err)
 	}
+	defer rf.Close()
+	if resumeFrom > 0 {
+		if _, serr := lf.Seek(resumeFrom, io.SeekStart); serr != nil {
+			return fmt.Errorf("seek local: %w", serr)
+		}
+		if _, serr := rf.Seek(resumeFrom, io.SeekStart); serr != nil {
+			return fmt.Errorf("seek remote: %w", serr)
+		}
+		h.mu.Lock()
+		h.Transferred = resumeFrom
+		h.mu.Unlock()
+	}
 	transferred, cerr := q.copyWithProgress(h, lf, rf)
 	_ = rf.Close()
-	return finishTransfer(h, direction, localPath, remotePath, existed, cli, transferred, cerr)
+	return finishTransfer(h, direction, localPath, remotePath, existed, cli, resumeFrom, transferred, cerr)
 }
 
-// finishTransfer 校验 size、处理取消清理（不动用户已存在的原文件）
-func finishTransfer(h *taskHandle, direction, localPath, remotePath string, existed bool, cli *sftp.Client, transferred int64, cerr error) error {
+// finishTransfer 校验 size（含续传基数）、处理取消清理（不动用户已存在的原文件）。
+// existed 为"拷贝开始时目标是否存在"——续传/重命名后为 false，取消时才清理该目标。
+func finishTransfer(h *taskHandle, direction, localPath, remotePath string, existed bool, cli *sftp.Client, base, transferred int64, cerr error) error {
 	if cerr == nil {
 		h.mu.Lock()
-		h.Transferred = transferred
+		h.Transferred = base + transferred
 		want := h.Size
 		h.mu.Unlock()
-		if transferred != want {
-			return fmt.Errorf("size mismatch: sent %d want %d", transferred, want)
+		if base+transferred != want {
+			return fmt.Errorf("size mismatch: sent %d want %d", base+transferred, want)
 		}
 		return nil
 	}

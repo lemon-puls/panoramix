@@ -46,10 +46,6 @@ export function ListTransfers() {
   return window['go']['app']['Service']['ListTransfers']();
 }
 
-export function Ping() {
-  return window['go']['app']['Service']['Ping']();
-}
-
 export function PickDir() {
   return window['go']['app']['Service']['PickDir']();
 }
@@ -60,6 +56,14 @@ export function PickSavePath(arg1) {
 
 export function PickUploadFile() {
   return window['go']['app']['Service']['PickUploadFile']();
+}
+
+export function PickUploadFiles() {
+  return window['go']['app']['Service']['PickUploadFiles']();
+}
+
+export function Ping() {
+  return window['go']['app']['Service']['Ping']();
 }
 
 export function ResizeSession(arg1, arg2, arg3) {

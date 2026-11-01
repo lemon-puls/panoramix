@@ -59,12 +59,14 @@ export default {
     refresh: '刷新',
     mkdir: '新建目录',
     upload: '上传',
+    uploadDir: '上传目录',
     download: '下载',
     open: '打开',
     dirName: '目录名称',
     empty: '目录为空',
     notConnected: '未连接会话',
     dropQueued: '已加入上传队列 {n} 项',
+    deleteFileConfirm: '确定删除文件「{name}」？',
     deleteDirConfirm: '确定删除目录「{name}」及其全部内容？此操作不可恢复。',
     conflictTitle: '目标文件已存在',
     conflictTip: '目标位置存在同名文件，请选择处理方式：',
@@ -76,6 +78,7 @@ export default {
   transfers: {
     title: '传输队列',
     empty: '暂无传输任务',
+    resumed: '续传',
   },
   tofu: {
     unknownTitle: '未知主机指纹',

@@ -5,6 +5,7 @@ import {
   PickDir,
   PickSavePath,
   PickUploadFile,
+  PickUploadFiles,
   SftpDownload,
   SftpHome,
   SftpListDir,
@@ -86,6 +87,20 @@ export const useFilesStore = defineStore('files', () => {
     await SftpUpload(sessionId, dir, localPath)
   }
 
+  // uploadFiles 多选文件上传（一次对话框选多个）
+  async function uploadFiles(sessionId: string, dir: string) {
+    const paths = await PickUploadFiles()
+    if (!paths || paths.length === 0) return
+    await uploadPaths(sessionId, dir, paths)
+  }
+
+  // uploadDir 选择目录整体上传（后端递归展开）
+  async function uploadDir(sessionId: string, dir: string) {
+    const localPath = await PickDir()
+    if (!localPath) return
+    await SftpUpload(sessionId, dir, localPath)
+  }
+
   async function uploadPaths(sessionId: string, dir: string, paths: string[]) {
     for (const p of paths) {
       await SftpUpload(sessionId, dir, p)
@@ -107,6 +122,8 @@ export const useFilesStore = defineStore('files', () => {
     downloadFile,
     downloadDir,
     upload,
+    uploadFiles,
+    uploadDir,
     uploadPaths,
   }
 })

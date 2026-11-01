@@ -426,7 +426,148 @@ func TestSftpQueueConflictPolicySkip(t *testing.T) {
 	}, "overwritten")
 }
 
-// sftpWaitStat 轮询等待远程条目消失（或出现）
+// TestSftpQueueResume 断点续传：远程预置半截文件 → 上传应从断点续传
+//（Resumed=true、不再从头），且最终内容与源一致；同 size 视为已完成。
+func TestSftpQueueResume(t *testing.T) {
+	port, closeSrv := startSftpSSHD(t)
+	defer closeSrv()
+	cli := dialTestClient(t, port)
+
+	root := t.TempDir()
+	local := t.TempDir()
+	em := &captureEmitter{}
+	q := NewQueue(dialSource{cli}, em)
+
+	// 源文件 10MB
+	full := make([]byte, 10*1024*1024)
+	for i := range full {
+		full[i] = byte(i * 7 % 253)
+	}
+	srcPath := filepath.Join(local, "resume.bin")
+	if err := os.WriteFile(srcPath, full, 0o600); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+
+	remoteDir := filepath.Join(root, "up")
+	if err := os.MkdirAll(remoteDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	remotePath := filepath.Join(remoteDir, "resume.bin")
+
+	// 远程预置前 4MB（模拟上次传了一半被打断）
+	half := full[:4*1024*1024]
+	rf, err := os.OpenFile(remotePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("seed remote: %v", err)
+	}
+	_, _ = rf.Write(half)
+	_ = rf.Close()
+
+	// 续传上传
+	if _, err := q.Enqueue("s1", DirUpload, remoteDir, srcPath); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	waitFor(t, 30*time.Second, func() bool {
+		tasks := q.Tasks()
+		for _, tk := range tasks {
+			if tk.State == StateDone && tk.Resumed {
+				return true
+			}
+		}
+		return false
+	}, "resumed upload done")
+
+	got, err := os.ReadFile(remotePath)
+	if err != nil {
+		t.Fatalf("read remote: %v", err)
+	}
+	if sha(got) != sha(full) {
+		t.Fatal("resumed remote content mismatch")
+	}
+
+	// 再传一次：目标恰好等大（内容可能不同）→ 进冲突流程由用户决策
+	batchID, err := q.Enqueue("s1", DirUpload, remoteDir, srcPath)
+	if err != nil {
+		t.Fatalf("enqueue again: %v", err)
+	}
+	waitFor(t, 10*time.Second, func() bool {
+		for _, tk := range q.Tasks() {
+			if tk.BatchID == batchID && tk.State == StateAwaitingPolicy {
+				return true
+			}
+		}
+		return false
+	}, "same-size conflict dialog")
+	if err := q.SetTransferPolicy(batchID, PolicySkip, true); err != nil {
+		t.Fatalf("set skip all: %v", err)
+	}
+	waitFor(t, 10*time.Second, func() bool {
+		for _, tk := range q.Tasks() {
+			if tk.BatchID == batchID && tk.State == StateSkipped {
+				return true
+			}
+		}
+		return false
+	}, "same-size skipped")
+}
+
+// TestSftpQueueDownloadResume 下载方向对称：本地预置半截文件 → 续传补全。
+func TestSftpQueueDownloadResume(t *testing.T) {
+	port, closeSrv := startSftpSSHD(t)
+	defer closeSrv()
+	cli := dialTestClient(t, port)
+
+	root := t.TempDir()
+	local := t.TempDir()
+	q := NewQueue(dialSource{cli}, &captureEmitter{})
+
+	// 远程源文件 6MB
+	full := make([]byte, 6*1024*1024)
+	for i := range full {
+		full[i] = byte(i % 249)
+	}
+	remoteDir := filepath.Join(root, "down")
+	if err := os.MkdirAll(remoteDir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	remotePath := filepath.Join(remoteDir, "dl.bin")
+	rf, err := os.OpenFile(remotePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("seed remote: %v", err)
+	}
+	_, _ = rf.Write(full)
+	_ = rf.Close()
+
+	// 本地预置前 1MB（模拟上次下载一半）
+	dlPath := filepath.Join(local, "dl.bin")
+	lf, err := os.OpenFile(dlPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("seed local: %v", err)
+	}
+	_, _ = lf.Write(full[:1*1024*1024])
+	_ = lf.Close()
+
+	// 下载：localPath 是"另存为"完整路径（存在但非目录 → 走完整路径语义）
+	if _, err := q.Enqueue("s1", DirDownload, remotePath, dlPath); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	waitFor(t, 30*time.Second, func() bool {
+		for _, tk := range q.Tasks() {
+			if tk.State == StateDone && tk.Resumed {
+				return true
+			}
+		}
+		return false
+	}, "resumed download done")
+
+	got, err := os.ReadFile(dlPath)
+	if err != nil {
+		t.Fatalf("read local: %v", err)
+	}
+	if sha(got) != sha(full) {
+		t.Fatal("resumed download content mismatch")
+	}
+}
 func sftpWaitStat(cli *gossh.Client, target string, timeout time.Duration) (os.FileInfo, error) {
 	sc, err := sftp.NewClient(cli)
 	if err != nil {
