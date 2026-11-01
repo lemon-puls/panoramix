@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lemon-puls/panoramix/internal/sftp"
 	"github.com/lemon-puls/panoramix/internal/ssh"
 	"github.com/lemon-puls/panoramix/internal/store"
 )
@@ -21,17 +22,27 @@ type Emitter interface {
 	Emit(event string, data ...interface{})
 }
 
+// Dialoger 原生文件对话框（由 main 注入 Wails 实现；internal/* 不 import wails）
+type Dialoger interface {
+	PickOpenFile() (string, error)
+	PickSavePath(defaultName string) (string, error)
+	PickDirectory() (string, error)
+}
+
 // Service Wails 绑定服务：前端唯一入口
 type Service struct {
-	store   store.Store
-	secrets store.SecretStore
-	emitter Emitter
-	ssh     *ssh.Manager
+	store     store.Store
+	secrets   store.SecretStore
+	emitter   Emitter
+	ssh       *ssh.Manager
+	transfers *sftp.Queue
+	dialog    Dialoger
 }
 
 // NewService 组装服务层
-func NewService(st store.Store, sec store.SecretStore, em Emitter, mgr *ssh.Manager) *Service {
-	return &Service{store: st, secrets: sec, emitter: em, ssh: mgr}
+func NewService(st store.Store, sec store.SecretStore, em Emitter, mgr *ssh.Manager,
+	transfers *sftp.Queue, dlg Dialoger) *Service {
+	return &Service{store: st, secrets: sec, emitter: em, ssh: mgr, transfers: transfers, dialog: dlg}
 }
 
 // Startup 由 Wails 在应用启动时回调
@@ -403,4 +414,164 @@ func (s *Service) DeleteSnippet(id string) error {
 		return fmt.Errorf("delete snippet: %w", err)
 	}
 	return nil
+}
+
+// ---------- SFTP 文件操作 ----------
+
+// SftpListDir 列远程目录（dir 为空取用户主目录）
+func (s *Service) SftpListDir(sessionID, dir string) ([]sftp.RemoteEntry, error) {
+	cli, err := sftp.NewSftpClient(s.ssh, sessionID)
+	if err != nil {
+		log.Printf("[app] sftp open failed: %v", err)
+		return nil, fmt.Errorf("sftp open: %w", err)
+	}
+	defer cli.Close()
+	entries, err := sftp.ListDir(cli, dir)
+	if err != nil {
+		return nil, fmt.Errorf("list dir: %w", err)
+	}
+	return entries, nil
+}
+
+// SftpHome 返回远程用户主目录（文件面板首次打开定位用）
+func (s *Service) SftpHome(sessionID string) (string, error) {
+	cli, err := sftp.NewSftpClient(s.ssh, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("sftp open: %w", err)
+	}
+	defer cli.Close()
+	wd, err := cli.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getwd: %w", err)
+	}
+	return wd, nil
+}
+
+// SftpMkdir 新建远程目录
+func (s *Service) SftpMkdir(sessionID, dir string) error {
+	cli, err := sftp.NewSftpClient(s.ssh, sessionID)
+	if err != nil {
+		return fmt.Errorf("sftp open: %w", err)
+	}
+	defer cli.Close()
+	if err := sftp.Mkdir(cli, dir); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	log.Printf("[app] remote dir created: %s", dir)
+	return nil
+}
+
+// SftpRemove 删除远程文件/目录（目录递归）
+func (s *Service) SftpRemove(sessionID, target string) error {
+	cli, err := sftp.NewSftpClient(s.ssh, sessionID)
+	if err != nil {
+		return fmt.Errorf("sftp open: %w", err)
+	}
+	defer cli.Close()
+	if err := sftp.RemoveAll(cli, target); err != nil {
+		return fmt.Errorf("remove %s: %w", target, err)
+	}
+	log.Printf("[app] remote removed: %s", target)
+	return nil
+}
+
+// SftpRename 重命名/移动远程条目
+func (s *Service) SftpRename(sessionID, oldPath, newPath string) error {
+	cli, err := sftp.NewSftpClient(s.ssh, sessionID)
+	if err != nil {
+		return fmt.Errorf("sftp open: %w", err)
+	}
+	defer cli.Close()
+	if err := sftp.Rename(cli, oldPath, newPath); err != nil {
+		return fmt.Errorf("rename %s -> %s: %w", oldPath, newPath, err)
+	}
+	return nil
+}
+
+// ---------- 传输队列 ----------
+
+// SftpUpload 上传本地文件/目录（目录递归），返回 batchID
+func (s *Service) SftpUpload(sessionID, remoteDir, localPath string) (string, error) {
+	if s.transfers == nil {
+		return "", fmt.Errorf("transfer queue not ready")
+	}
+	batchID, err := s.transfers.Enqueue(sessionID, sftp.DirUpload, remoteDir, localPath)
+	if err != nil {
+		log.Printf("[app] upload enqueue failed: %v", err)
+		return "", err
+	}
+	log.Printf("[app] upload batch started: %s %s -> %s", batchID, localPath, remoteDir)
+	return batchID, nil
+}
+
+// SftpDownload 下载远程文件/目录（目录递归），localDir 为本地目标目录，返回 batchID
+func (s *Service) SftpDownload(sessionID, remotePath, localDir string) (string, error) {
+	if s.transfers == nil {
+		return "", fmt.Errorf("transfer queue not ready")
+	}
+	batchID, err := s.transfers.Enqueue(sessionID, sftp.DirDownload, remotePath, localDir)
+	if err != nil {
+		log.Printf("[app] download enqueue failed: %v", err)
+		return "", err
+	}
+	log.Printf("[app] download batch started: %s %s -> %s", batchID, remotePath, localDir)
+	return batchID, nil
+}
+
+// ListTransfers 返回全部任务快照（前端打开传输面板时填充）
+func (s *Service) ListTransfers() []sftp.Task {
+	if s.transfers == nil {
+		return nil
+	}
+	return s.transfers.Tasks()
+}
+
+// TransferCancel 取消任务
+func (s *Service) TransferCancel(taskID string) error {
+	if s.transfers == nil {
+		return fmt.Errorf("transfer queue not ready")
+	}
+	return s.transfers.Cancel(taskID)
+}
+
+// TransferRetry 重试失败/取消的任务
+func (s *Service) TransferRetry(taskID string) error {
+	if s.transfers == nil {
+		return fmt.Errorf("transfer queue not ready")
+	}
+	return s.transfers.Retry(taskID)
+}
+
+// SetTransferPolicy 覆盖冲突策略（applyAll=true 记住整批）
+func (s *Service) SetTransferPolicy(batchID, mode string, applyAll bool) error {
+	if s.transfers == nil {
+		return fmt.Errorf("transfer queue not ready")
+	}
+	return s.transfers.SetTransferPolicy(batchID, mode, applyAll)
+}
+
+// ---------- 文件对话框 ----------
+
+// PickUploadFile 打开"选择文件"对话框，返回本地路径
+func (s *Service) PickUploadFile() (string, error) {
+	if s.dialog == nil {
+		return "", fmt.Errorf("dialog not ready")
+	}
+	return s.dialog.PickOpenFile()
+}
+
+// PickSavePath 打开"另存为"对话框（默认文件名取自远程文件），返回本地路径
+func (s *Service) PickSavePath(defaultName string) (string, error) {
+	if s.dialog == nil {
+		return "", fmt.Errorf("dialog not ready")
+	}
+	return s.dialog.PickSavePath(defaultName)
+}
+
+// PickDir 打开目录选择对话框（目录下载用）
+func (s *Service) PickDir() (string, error) {
+	if s.dialog == nil {
+		return "", fmt.Errorf("dialog not ready")
+	}
+	return s.dialog.PickDirectory()
 }

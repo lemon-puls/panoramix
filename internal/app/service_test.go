@@ -47,8 +47,8 @@ func newTestService(t *testing.T) (*Service, *memSecrets) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	sec := newMemSecrets()
-	// 连接相关测试不在此处（无 sshd）；Manager 传 nil 由 ConnectHost 自行兜底
-	return NewService(st, sec, nopEmitter{}, nil), sec
+	// 连接/传输相关测试不在此处（无 sshd）；Manager 与队列传 nil 由绑定方法自行兜底
+	return NewService(st, sec, nopEmitter{}, nil, nil, nil), sec
 }
 
 // ---------- 脱敏（硬性验收项） ----------

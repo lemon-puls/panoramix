@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // Manager 管理全部活跃 SSH 会话；是 internal/app 操作 SSH 的唯一入口。
@@ -70,6 +72,22 @@ func (m *Manager) remove(id string) {
 	m.mu.Lock()
 	delete(m.sessions, id)
 	m.mu.Unlock()
+}
+
+// Client 返回会话的底层 SSH 客户端，供 app 层挂载 SFTP 等子系统
+// （依赖方向：app → sftp 取 ClientSource 接口 → 此实现，见 ARCHITECTURE.md）。
+// 会话不存在或已断开时返回错误。
+func (m *Manager) Client(sessionID string) (*gossh.Client, error) {
+	s, err := m.get(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client == nil {
+		return nil, errors.New("session not connected")
+	}
+	return s.client, nil
 }
 
 func (m *Manager) get(id string) (*Session, error) {

@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/lemon-puls/panoramix/internal/app"
+	"github.com/lemon-puls/panoramix/internal/sftp"
 	"github.com/lemon-puls/panoramix/internal/ssh"
 	"github.com/lemon-puls/panoramix/internal/store"
 )
@@ -34,13 +35,43 @@ func (e *wailsEmitter) SetContext(ctx context.Context) {
 }
 
 func (e *wailsEmitter) Emit(event string, data ...interface{}) {
-	e.mu.RLock()
-	ctx := e.ctx
-	e.mu.RUnlock()
+	ctx := e.Ctx()
 	if ctx == nil {
 		return // 启动完成前的事件直接丢弃
 	}
 	runtime.EventsEmit(ctx, event, data...)
+}
+
+// Ctx 返回当前 runtime 上下文（供对话框等需要 ctx 的桥接使用）
+func (e *wailsEmitter) Ctx() context.Context {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.ctx
+}
+
+// wailsDialoger 把 internal/app 的 Dialoger 接口接到 Wails 原生对话框。
+// 与 wailsEmitter 同理：wails 耦合只存在于 main.go。
+type wailsDialoger struct {
+	em *wailsEmitter
+}
+
+func (d *wailsDialoger) PickOpenFile() (string, error) {
+	return runtime.OpenFileDialog(d.em.Ctx(), runtime.OpenDialogOptions{
+		Title: "选择要上传的文件",
+	})
+}
+
+func (d *wailsDialoger) PickSavePath(defaultName string) (string, error) {
+	return runtime.SaveFileDialog(d.em.Ctx(), runtime.SaveDialogOptions{
+		Title:           "选择保存位置",
+		DefaultFilename: defaultName,
+	})
+}
+
+func (d *wailsDialoger) PickDirectory() (string, error) {
+	return runtime.OpenDirectoryDialog(d.em.Ctx(), runtime.OpenDialogOptions{
+		Title: "选择下载目录",
+	})
 }
 
 func main() {
@@ -64,7 +95,10 @@ func main() {
 		filepath.Join(store.ConfigDir(), "known_hosts"),
 		filepath.Join(store.ConfigDir(), "logs"))
 
-	svc := app.NewService(st, secrets, em, mgr)
+	// SFTP 传输队列：复用已连接会话，事件经同一 Emitter 推送
+	queue := sftp.NewQueue(mgr, em)
+
+	svc := app.NewService(st, secrets, em, mgr, queue, &wailsDialoger{em: em})
 
 	if err := wails.Run(&options.App{
 		Title:            "Panoramix",
