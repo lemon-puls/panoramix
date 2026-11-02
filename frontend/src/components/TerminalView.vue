@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useDialog } from 'naive-ui'
+import { useDialog, useMessage } from 'naive-ui'
 import { NButton, NDropdown, NInput } from 'naive-ui'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -10,13 +10,19 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import { ClipboardGetText, ClipboardSetText } from '../../wailsjs/runtime/runtime'
 import { useTerminalsStore, type TerminalPane } from '../stores/terminals'
+import { useFilesStore } from '../stores/files'
+import { useTransfersStore } from '../stores/transfers'
+import * as models from '../../wailsjs/go/models'
 
 // 单个终端视图：xterm 实例 + 事件绑定 + 快捷键 + 搜索/右键菜单
 // pane 为标签内的一个会话视图（分屏时一个标签渲染多个）
 const props = defineProps<{ tabId: string; pane: TerminalPane }>()
 const { t } = useI18n()
 const dialog = useDialog()
+const message = useMessage()
 const store = useTerminalsStore()
+const files = useFilesStore()
+const transfers = useTransfersStore()
 
 const container = ref<HTMLDivElement>()
 const searchVisible = ref(false)
@@ -155,7 +161,7 @@ onMounted(() => {
 
   // 必须先挂 resize 监听再做 fit：首帧 fit 触发的尺寸变化是 PTY 初始
   // 80x24 → 真实尺寸的第一次同步，注册晚了就会丢失这次 WindowChange
-  term.onData((d) => void store.write(props.pane.sessionId, d))
+  term.onData((d) => handleData(d))
   term.onResize(({ cols, rows }) => void store.resize(props.pane.sessionId, cols, rows))
   fit.fit()
 
@@ -168,7 +174,92 @@ onMounted(() => {
   })
 
   term.attachCustomKeyEventHandler(onKey)
+  void transfers.ensureSeeded()
 })
+
+// ---------- rz/sz 智能接管 ----------
+// 用户在终端里敲 rz/sz 时，改用内置 SFTP 传输（进度/断点续传/冲突策略齐全），
+// 命令本身不发送到服务器。只有当输入行以明确命令开头时才接管，其余输入原样透传。
+let inputBuf = ''
+
+function handleData(d: string) {
+  if (tryRzSz(d)) return
+  void store.write(props.pane.sessionId, d)
+}
+
+function tryRzSz(d: string): boolean {
+  // 含控制序列（方向键/粘贴多行等）时跟踪失准，放弃接管
+  for (const ch of d) {
+    if (ch === '\r') {
+      const line = inputBuf.trim()
+      inputBuf = ''
+      if (line) {
+        const handled = interceptCommand(line)
+        if (handled) return true
+      }
+      continue
+    }
+    if (ch === '\x7f' || ch === '\x08') {
+      inputBuf = inputBuf.slice(0, -1)
+      continue
+    }
+    if (ch >= ' ' && ch <= '~') {
+      inputBuf += ch
+      continue
+    }
+    // 其他控制字符（含方向键/粘贴前缀）→ 停用本行跟踪
+    if (ch !== '\t') inputBuf = ''
+  }
+  return false
+}
+
+// interceptCommand 识别并拦截 rz/sz；返回 true 表示已接管
+function interceptCommand(line: string): boolean {
+  const sid = props.pane.sessionId
+  // sz [-opts] file1 [file2 ...]
+  const szMatch = /^sz\s+((?:-\S+\s+)*)(.+)$/.exec(line)
+  if (szMatch) {
+    const targets = szMatch[2].trim().split(/\s+/).filter(Boolean)
+    if (targets.length > 0) {
+      void downloadViaSftp(sid, targets)
+      return true
+    }
+  }
+  // rz [-opts]
+  if (/^rz(\s+-\S+)*\s*$/.test(line)) {
+    void uploadViaSftp(sid)
+    return true
+  }
+  return false
+}
+
+async function downloadViaSftp(sid: string, targets: string[]) {
+  try {
+    for (const t of targets) {
+      const abs = t.startsWith('/') ? t : `${files.cwd || '.'}/${t}`
+      await files.downloadToLocal(sid, {
+        name: abs.split('/').pop() ?? abs,
+        path: abs,
+        isDir: false,
+        size: 0,
+        mode: '',
+        mtime: null,
+      } as models.sftp.RemoteEntry)
+    }
+    message.success(t('terminal.rzszDownload', { n: targets.length, dir: files.localCwd }))
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+async function uploadViaSftp(sid: string) {
+  try {
+    await files.uploadFiles(sid, files.cwd)
+    message.success(t('terminal.rzszUpload'))
+  } catch (e) {
+    message.error(String(e))
+  }
+}
 
 onBeforeUnmount(() => {
   ro?.disconnect()

@@ -52,6 +52,8 @@ export default {
     connectFailed: '连接失败',
     authFailed: '认证失败：',
     split: '切换分屏方向',
+    rzszDownload: '已用内置 SFTP 下载 {n} 个文件到 {dir}',
+    rzszUpload: '已打开文件选择，上传走内置 SFTP（支持进度与断点续传）',
     closePane: '关闭此分屏',
   },
   settings: {

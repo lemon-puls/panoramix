@@ -53,6 +53,8 @@ export default {
     connectFailed: 'Connection failed',
     authFailed: 'Authentication failed: ',
     split: 'Toggle split direction',
+    rzszDownload: 'Downloaded {n} file(s) via built-in SFTP to {dir}',
+    rzszUpload: 'File picker opened; uploads use built-in SFTP (progress + resume)',
     closePane: 'Close this pane',
   },
   settings: {

@@ -21,6 +21,9 @@ Currently pre-release, under active development.
 
 界面支持 **简体中文 / English** 切换（侧栏 ⚙）。
 
+> **关于 rz/sz**：在终端里输入 `rz` / `sz <文件>` 时，Panoramix 会自动改用内置
+> SFTP 传输（进度、断点续传、冲突策略齐全），无需服务器安装 lrzsz。
+
 完整路线与验收标准见 [ROADMAP.md](ROADMAP.md)，架构设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## 下载
