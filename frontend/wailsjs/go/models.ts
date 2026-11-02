@@ -20,6 +20,60 @@ export namespace app {
 	        this.message = source["message"];
 	    }
 	}
+	export class DBConnInput {
+	    id: string;
+	    name: string;
+	    kind: string;
+	    addr: string;
+	    port: number;
+	    username: string;
+	    dbName: string;
+	    hasSecret: boolean;
+	    sort: number;
+	    // Go type: time
+	    createdAt: any;
+	    // Go type: time
+	    updatedAt: any;
+	    password: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DBConnInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.addr = source["addr"];
+	        this.port = source["port"];
+	        this.username = source["username"];
+	        this.dbName = source["dbName"];
+	        this.hasSecret = source["hasSecret"];
+	        this.sort = source["sort"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	        this.password = source["password"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class HostInput {
 	    id: string;
 	    groupId: string;
@@ -125,6 +179,142 @@ export namespace app {
 	}
 
 }
+
+export namespace db {
+	
+	export class KeyInfo {
+	    key: string;
+	    ttl: number;
+	    type: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new KeyInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.ttl = source["ttl"];
+	        this.type = source["type"];
+	    }
+	}
+	export class KeyPage {
+	    keys: KeyInfo[];
+	    cursor: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new KeyPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.keys = this.convertValues(source["keys"], KeyInfo);
+	        this.cursor = source["cursor"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Result {
+	    columns: string[];
+	    rows: string[][];
+	    affected: number;
+	    durationMs: number;
+	    truncated: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Result(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.columns = source["columns"];
+	        this.rows = source["rows"];
+	        this.affected = source["affected"];
+	        this.durationMs = source["durationMs"];
+	        this.truncated = source["truncated"];
+	    }
+	}
+	export class ZMember {
+	    member: string;
+	    score: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ZMember(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.member = source["member"];
+	        this.score = source["score"];
+	    }
+	}
+	export class Value {
+	    key: string;
+	    type: string;
+	    ttl: number;
+	    str?: string;
+	    hash?: Record<string, string>;
+	    list?: string[];
+	    set?: string[];
+	    zset?: ZMember[];
+	    total: number;
+	    truncated: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Value(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.type = source["type"];
+	        this.ttl = source["ttl"];
+	        this.str = source["str"];
+	        this.hash = source["hash"];
+	        this.list = source["list"];
+	        this.set = source["set"];
+	        this.zset = this.convertValues(source["zset"], ZMember);
+	        this.total = source["total"];
+	        this.truncated = source["truncated"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 
 export namespace fsx {
 	
@@ -278,6 +468,58 @@ export namespace sftp {
 
 export namespace store {
 	
+	export class DBConn {
+	    id: string;
+	    name: string;
+	    kind: string;
+	    addr: string;
+	    port: number;
+	    username: string;
+	    dbName: string;
+	    hasSecret: boolean;
+	    sort: number;
+	    // Go type: time
+	    createdAt: any;
+	    // Go type: time
+	    updatedAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new DBConn(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.addr = source["addr"];
+	        this.port = source["port"];
+	        this.username = source["username"];
+	        this.dbName = source["dbName"];
+	        this.hasSecret = source["hasSecret"];
+	        this.sort = source["sort"];
+	        this.createdAt = this.convertValues(source["createdAt"], null);
+	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Group {
 	    id: string;
 	    name: string;

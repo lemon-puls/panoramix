@@ -10,6 +10,14 @@ export function ConnectHost(arg1, arg2) {
   return window['go']['app']['Service']['ConnectHost'](arg1, arg2);
 }
 
+export function DBQuery(arg1, arg2, arg3) {
+  return window['go']['app']['Service']['DBQuery'](arg1, arg2, arg3);
+}
+
+export function DeleteDBConn(arg1) {
+  return window['go']['app']['Service']['DeleteDBConn'](arg1);
+}
+
 export function DeleteGroup(arg1) {
   return window['go']['app']['Service']['DeleteGroup'](arg1);
 }
@@ -46,6 +54,10 @@ export function IsSessionLogEnabled() {
   return window['go']['app']['Service']['IsSessionLogEnabled']();
 }
 
+export function ListDBConns() {
+  return window['go']['app']['Service']['ListDBConns']();
+}
+
 export function ListGroups() {
   return window['go']['app']['Service']['ListGroups']();
 }
@@ -74,12 +86,12 @@ export function LocalListDir(arg1) {
   return window['go']['app']['Service']['LocalListDir'](arg1);
 }
 
-export function LocalRoots() {
-  return window['go']['app']['Service']['LocalRoots']();
-}
-
 export function LocalParent(arg1) {
   return window['go']['app']['Service']['LocalParent'](arg1);
+}
+
+export function LocalRoots() {
+  return window['go']['app']['Service']['LocalRoots']();
 }
 
 export function PauseTransfer(arg1) {
@@ -106,6 +118,26 @@ export function Ping() {
   return window['go']['app']['Service']['Ping']();
 }
 
+export function RedisDeleteKey(arg1, arg2) {
+  return window['go']['app']['Service']['RedisDeleteKey'](arg1, arg2);
+}
+
+export function RedisGetValue(arg1, arg2) {
+  return window['go']['app']['Service']['RedisGetValue'](arg1, arg2);
+}
+
+export function RedisScanKeys(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['Service']['RedisScanKeys'](arg1, arg2, arg3, arg4);
+}
+
+export function RedisSetString(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['Service']['RedisSetString'](arg1, arg2, arg3, arg4);
+}
+
+export function RedisSetTTL(arg1, arg2, arg3) {
+  return window['go']['app']['Service']['RedisSetTTL'](arg1, arg2, arg3);
+}
+
 export function ResizeSession(arg1, arg2, arg3) {
   return window['go']['app']['Service']['ResizeSession'](arg1, arg2, arg3);
 }
@@ -116,6 +148,10 @@ export function ResolveEditConflict(arg1, arg2) {
 
 export function ResumeTransfer(arg1) {
   return window['go']['app']['Service']['ResumeTransfer'](arg1);
+}
+
+export function SaveDBConn(arg1) {
+  return window['go']['app']['Service']['SaveDBConn'](arg1);
 }
 
 export function SaveGroup(arg1) {
@@ -184,6 +220,10 @@ export function SftpUpload(arg1, arg2, arg3) {
 
 export function StartRemoteEdit(arg1, arg2) {
   return window['go']['app']['Service']['StartRemoteEdit'](arg1, arg2);
+}
+
+export function TestDBConn(arg1) {
+  return window['go']['app']['Service']['TestDBConn'](arg1);
 }
 
 export function TransferCancel(arg1) {

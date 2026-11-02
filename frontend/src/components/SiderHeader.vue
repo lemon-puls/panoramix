@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { NButton, NInputNumber, NPopover, NSelect, NSwitch } from 'naive-ui'
 import { SUPPORTED_LOCALES, setLocale, type LocaleCode } from '../i18n'
+import { mainView } from '../stores/view'
 import {
   GetTransferSpeedLimit,
   IsCwdSyncEnabled,
@@ -15,6 +16,9 @@ import {
 
 // 侧栏头部：应用标题 + 设置弹层（会话日志开关）。
 // 必须渲染在 NMessageProvider 内部（useMessage 依赖注入）。
+// 模块级 ref 需在 setup 内引用才会在模板中解包
+const view = mainView
+
 const { t } = useI18n()
 const message = useMessage()
 
@@ -76,7 +80,21 @@ async function onToggleLog(on: boolean) {
 
 <template>
   <div class="sider-title">
-    <span>{{ t('app.title') }}</span>
+    <span class="brand">{{ t('app.title') }}</span>
+    <span class="view-switch">
+      <button
+        class="view-btn"
+        :class="{ active: view === 'terminal' }"
+        :title="t('view.terminal')"
+        @click="view = 'terminal'"
+      >⌨</button>
+      <button
+        class="view-btn"
+        :class="{ active: view === 'db' }"
+        :title="t('view.database')"
+        @click="view = 'db'"
+      >▤</button>
+    </span>
     <n-popover trigger="click" placement="bottom-start">
       <template #trigger>
         <n-button quaternary size="tiny">⚙</n-button>
@@ -126,6 +144,32 @@ async function onToggleLog(on: boolean) {
   padding: 12px 12px 4px;
   font-weight: 600;
   font-size: 15px;
+}
+.brand {
+  flex-shrink: 0;
+}
+.view-switch {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+  margin-right: 4px;
+}
+.view-btn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 1px 6px;
+}
+.view-btn:hover {
+  color: #fff;
+}
+.view-btn.active {
+  color: #63e2b7;
+  border-color: rgba(99, 226, 183, 0.4);
+  background: rgba(99, 226, 183, 0.08);
 }
 .settings {
   display: flex;

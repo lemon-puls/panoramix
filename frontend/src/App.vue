@@ -16,6 +16,7 @@ import {
   zhCN,
 } from 'naive-ui'
 import { i18n } from './i18n'
+import { mainView } from './stores/view'
 import { Ping } from '../wailsjs/go/app/Service'
 import { useTerminalsStore } from './stores/terminals'
 import { useFilesStore } from './stores/files'
@@ -26,6 +27,9 @@ import SnippetsPanel from './components/SnippetsPanel.vue'
 import TerminalTabs from './components/TerminalTabs.vue'
 import FilePanel from './components/FilePanel.vue'
 import MonitorPanel from './components/MonitorPanel.vue'
+
+// 模块级 ref 需在 setup 内引用才会在模板中解包
+const view = mainView
 
 const { t } = useI18n()
 const terminals = useTerminalsStore()
@@ -68,7 +72,8 @@ onMounted(async () => {
           <n-layout-content content-style="padding: 12px; height: 100%">
             <div class="content-row">
               <div class="term-area">
-                <TerminalTabs v-if="terminals.tabs.length > 0" />
+                <DBView v-if="view === 'db'" class="db-area" />
+                <TerminalTabs v-else-if="terminals.tabs.length > 0" />
                 <div v-else class="hero">
                   <h1 class="brand">Panoramix</h1>
                   <p class="version">{{ t('app.version') }}</p>
@@ -78,8 +83,10 @@ onMounted(async () => {
                   <p class="hint">{{ t('app.m2Hint') }}</p>
                 </div>
               </div>
-              <FilePanel v-if="files.showPanel && terminals.tabs.length > 0" class="files-area dual" />
-              <MonitorPanel v-else-if="monitor.showPanel && terminals.tabs.length > 0" class="files-area" />
+              <template v-if="view === 'terminal'">
+                <FilePanel v-if="files.showPanel && terminals.tabs.length > 0" class="files-area dual" />
+                <MonitorPanel v-else-if="monitor.showPanel && terminals.tabs.length > 0" class="files-area" />
+              </template>
             </div>
           </n-layout-content>
         </n-layout>
@@ -104,6 +111,9 @@ onMounted(async () => {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+}
+.db-area {
   height: 100%;
 }
 .files-area {
