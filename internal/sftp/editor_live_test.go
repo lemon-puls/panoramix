@@ -54,12 +54,12 @@ func TestEditorRoundtrip(t *testing.T) {
 		return err == nil && string(b) == "port=8080\n"
 	}, "auto upload after save")
 
-	em.mu.Lock()
-	n := len(em.editEvents)
-	em.mu.Unlock()
-	if n == 0 {
-		t.Fatal("no edit:state events emitted")
-	}
+	// 事件在内容写入之后发出，可能与上面的 waitFor 存在极小竞态——等待而非立即断言
+	waitFor(t, 5*time.Second, func() bool {
+		em.mu.Lock()
+		defer em.mu.Unlock()
+		return len(em.editEvents) > 0
+	}, "edit:state event emitted")
 }
 
 // TestEditorConflictDetected 编辑期间远程被改动 → 保存时挂起冲突，不覆盖

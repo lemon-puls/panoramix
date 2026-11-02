@@ -3,7 +3,7 @@
 import {app} from '../models';
 import {store} from '../models';
 import {sftp} from '../models';
-import {fsx} from '../models';
+import {xshell} from '../models';
 
 export function CloseSession(arg1:string):Promise<void>;
 
@@ -17,33 +17,15 @@ export function DeleteHostSecret(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteSnippet(arg1:string):Promise<void>;
 
-export function FinishRemoteEdit(arg1:string):Promise<void>;
-
-export function GetTransferSpeedLimit():Promise<number>;
-
-export function ImportHosts(arg1:Array<app.ImportPreview>):Promise<number>;
-
-export function IsCwdSyncEnabled():Promise<boolean>;
-
 export function IsSessionLogEnabled():Promise<boolean>;
 
 export function ListGroups():Promise<Array<store.Group>>;
 
 export function ListHosts():Promise<Array<store.Host>>;
 
-export function ListRemoteEdits():Promise<Array<sftp.EditInfo>>;
-
 export function ListSnippets():Promise<Array<store.Snippet>>;
 
 export function ListTransfers():Promise<Array<sftp.Task>>;
-
-export function LocalHome():Promise<string>;
-
-export function LocalListDir(arg1:string):Promise<Array<fsx.Entry>>;
-
-export function LocalParent(arg1:string):Promise<string>;
-
-export function PauseTransfer(arg1:string):Promise<void>;
 
 export function PickDir():Promise<string>;
 
@@ -57,27 +39,17 @@ export function Ping():Promise<string>;
 
 export function ResizeSession(arg1:string,arg2:number,arg3:number):Promise<void>;
 
-export function ResolveEditConflict(arg1:string,arg2:boolean):Promise<void>;
-
-export function ResumeTransfer(arg1:string):Promise<void>;
-
 export function SaveGroup(arg1:store.Group):Promise<store.Group>;
 
 export function SaveHost(arg1:app.HostInput):Promise<store.Host>;
 
 export function SaveSnippet(arg1:store.Snippet):Promise<store.Snippet>;
 
-export function ScanImportDir(arg1:string,arg2:string):Promise<Array<app.ImportPreview>>;
-
-export function SetCwdSyncEnabled(arg1:boolean):Promise<void>;
-
 export function SetHostSecret(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SetSessionLogEnabled(arg1:boolean):Promise<void>;
 
 export function SetTransferPolicy(arg1:string,arg2:string,arg3:boolean):Promise<void>;
-
-export function SetTransferSpeedLimit(arg1:number):Promise<void>;
 
 export function SftpDownload(arg1:string,arg2:string,arg3:string):Promise<string>;
 
@@ -93,10 +65,12 @@ export function SftpRename(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SftpUpload(arg1:string,arg2:string,arg3:string):Promise<string>;
 
-export function StartRemoteEdit(arg1:string,arg2:string):Promise<sftp.EditInfo>;
-
 export function TransferCancel(arg1:string):Promise<void>;
 
 export function TransferRetry(arg1:string):Promise<void>;
 
 export function WriteSession(arg1:string,arg2:string):Promise<void>;
+
+export function XshellImport(arg1:Array<xshell.Preview>):Promise<number>;
+
+export function XshellScanDir(arg1:string):Promise<Array<xshell.Preview>>;
