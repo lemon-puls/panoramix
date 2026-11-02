@@ -28,6 +28,7 @@ export default {
   },
   menu: {
     connect: '连接',
+    connectSplit: '在新分屏中打开',
     edit: '编辑',
     clone: '克隆',
     rename: '重命名',
@@ -50,6 +51,8 @@ export default {
     exited: '会话已结束：{info}',
     connectFailed: '连接失败',
     authFailed: '认证失败：',
+    split: '切换分屏方向',
+    closePane: '关闭此分屏',
   },
   settings: {
     sessionLog: '会话日志（按天落文件）',

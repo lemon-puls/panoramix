@@ -23,7 +23,7 @@ onMounted(() => {
 })
 
 const canSend = computed(
-  () => terminals.activeSessionId && terminals.activeTab?.state === 'connected',
+  () => terminals.activeSessionId && terminals.activePane?.state === 'connected',
 )
 
 function openCreate() {
@@ -67,11 +67,11 @@ async function save() {
 
 function send(sn: models.store.Snippet) {
   const sessionId = terminals.activeSessionId
-  if (!sessionId || terminals.activeTab?.state !== 'connected') {
+  if (!sessionId || terminals.activePane?.state !== 'connected') {
     message.warning(t('snippets.noActive'))
     return
   }
-  const content = sn.content.replace('{host}', terminals.activeTab?.hostName ?? '')
+  const content = sn.content.replace('{host}', terminals.activePane?.hostName ?? '')
   void terminals.write(sessionId, content + '\r')
 }
 

@@ -9,10 +9,11 @@ import { SearchAddon } from '@xterm/addon-search'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import { ClipboardGetText, ClipboardSetText } from '../../wailsjs/runtime/runtime'
-import { useTerminalsStore, type TerminalTab } from '../stores/terminals'
+import { useTerminalsStore, type TerminalPane } from '../stores/terminals'
 
 // 单个终端视图：xterm 实例 + 事件绑定 + 快捷键 + 搜索/右键菜单
-const props = defineProps<{ tab: TerminalTab }>()
+// pane 为标签内的一个会话视图（分屏时一个标签渲染多个）
+const props = defineProps<{ tabId: string; pane: TerminalPane }>()
 const { t } = useI18n()
 const dialog = useDialog()
 const store = useTerminalsStore()
@@ -117,10 +118,10 @@ function onMenuSelect(key: string) {
     case 'disconnect':
       dialog.warning({
         title: t('terminal.disconnectTitle'),
-        content: t('terminal.disconnectConfirm', { name: props.tab.hostName }),
+        content: t('terminal.disconnectConfirm', { name: props.pane.hostName }),
         positiveText: t('terminal.disconnect'),
         negativeText: t('common.cancel'),
-        onPositiveClick: () => store.closeTab(props.tab.sessionId),
+        onPositiveClick: () => store.closePane(props.tabId, props.pane.sessionId),
       })
       break
   }
@@ -154,14 +155,14 @@ onMounted(() => {
 
   // 必须先挂 resize 监听再做 fit：首帧 fit 触发的尺寸变化是 PTY 初始
   // 80x24 → 真实尺寸的第一次同步，注册晚了就会丢失这次 WindowChange
-  term.onData((d) => void store.write(props.tab.sessionId, d))
-  term.onResize(({ cols, rows }) => void store.resize(props.tab.sessionId, cols, rows))
+  term.onData((d) => void store.write(props.pane.sessionId, d))
+  term.onResize(({ cols, rows }) => void store.resize(props.pane.sessionId, cols, rows))
   fit.fit()
 
   ro = new ResizeObserver(() => fit.fit())
   ro.observe(container.value!)
 
-  store.registerOutput(props.tab.sessionId, (p) => {
+  store.registerOutput(props.pane.sessionId, (p) => {
     if (p.dataB64) term.write(b64ToBytes(p.dataB64))
     if (p.code !== undefined) exited.value = `${p.reason ?? ''} (exit ${p.code})`
   })
@@ -171,7 +172,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   ro?.disconnect()
-  store.unregisterOutput(props.tab.sessionId)
+  store.unregisterOutput(props.pane.sessionId)
   term?.dispose()
 })
 </script>
@@ -190,12 +191,12 @@ onBeforeUnmount(() => {
       <n-button size="small" quaternary @click="searchVisible = false">×</n-button>
     </div>
     <div ref="container" class="term" @wheel="onWheel" @contextmenu.prevent="openMenu" />
-    <div v-if="tab.state === 'reconnecting'" class="overlay warn">
-      {{ t('terminal.reconnecting', { name: tab.hostName }) }}
+    <div v-if="pane.state === 'reconnecting'" class="overlay warn">
+      {{ t('terminal.reconnecting', { name: pane.hostName }) }}
     </div>
     <div v-if="exited" class="overlay">
       <div>{{ t('terminal.exited', { info: exited }) }}</div>
-      <n-button size="small" class="close-btn" @click="store.closeTab(tab.sessionId)">
+      <n-button size="small" class="close-btn" @click="store.closePane(tabId, pane.sessionId)">
         {{ t('common.close') }}
       </n-button>
     </div>
@@ -215,7 +216,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .term-wrap {
   position: relative;
-  height: calc(100vh - 118px);
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }

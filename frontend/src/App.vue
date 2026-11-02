@@ -98,10 +98,13 @@ onMounted(async () => {
   display: flex;
   gap: 8px;
   height: 100%;
+  min-height: 0;
 }
 .term-area {
   flex: 1;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
 }
 .files-area {
   width: 380px;

@@ -45,13 +45,12 @@ async function main() {
   setActivePinia(pinia)
   const terminals = useTerminalsStore()
   terminals.tabs.push({
-    sessionId: 'demo',
-    hostId: 'h1',
-    hostName: '阿里云',
-    state: 'connected',
-    exitReason: '',
+    id: 'preview-tab',
+    panes: [{ sessionId: 'demo', hostId: 'h1', hostName: '阿里云', state: 'connected', exitReason: '' }],
+    activePaneId: 'demo',
+    direction: 'row',
   })
-  terminals.activeId = 'demo'
+  terminals.activeTabId = 'preview-tab'
 
   const app = createApp({
     render: () =>

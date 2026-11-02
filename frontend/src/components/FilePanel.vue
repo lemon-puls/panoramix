@@ -21,7 +21,7 @@ const transfers = useTransfersStore()
 const edits = useEditsStore()
 
 const sessionId = computed(() => terminals.activeSessionId ?? '')
-const connected = computed(() => terminals.activeTab?.state === 'connected')
+const connected = computed(() => terminals.activePane?.state === 'connected')
 
 onMounted(() => {
   edits.ensureBus()

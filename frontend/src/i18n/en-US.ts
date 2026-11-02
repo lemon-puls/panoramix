@@ -29,6 +29,7 @@ export default {
   },
   menu: {
     connect: 'Connect',
+    connectSplit: 'Open in New Split',
     edit: 'Edit',
     clone: 'Clone',
     rename: 'Rename',
@@ -51,6 +52,8 @@ export default {
     exited: 'Session ended: {info}',
     connectFailed: 'Connection failed',
     authFailed: 'Authentication failed: ',
+    split: 'Toggle split direction',
+    closePane: 'Close this pane',
   },
   settings: {
     sessionLog: 'Session log (daily files)',

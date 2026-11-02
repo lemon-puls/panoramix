@@ -108,6 +108,7 @@ const menuOptions = computed<DropdownOption[]>(() => {
   }
   return [
     { label: t('menu.connect'), key: 'connect' },
+    { label: t('menu.connectSplit'), key: 'connectSplit' },
     { type: 'divider', key: 'd1' },
     { label: t('menu.edit'), key: 'editHost' },
     { label: t('menu.clone'), key: 'cloneHost' },
@@ -148,6 +149,9 @@ async function onMenuSelect(key: string) {
     switch (key) {
       case 'connect':
         tryConnect(node)
+        break
+      case 'connectSplit':
+        if (node.host) await tryConnectHost(node.host, true)
         break
       case 'newHostHere':
         Object.assign(hostModal, { show: true, host: null, groupId: node.group?.id ?? '' })
@@ -238,9 +242,9 @@ async function onMenuSelect(key: string) {
 
 // 真实连接流程：直连 → TOFU 未知指纹弹窗（信任后 add 重试）→
 // 指纹变更红色警告（明确确认后 replace 重试）→ 其余错误直接提示
-async function tryConnectHost(host: models.store.Host) {
+async function tryConnectHost(host: models.store.Host, split = false) {
   if (!host) return
-  const res = await terminals.connect(host)
+  const res = await (split ? terminals.splitPane(host) : terminals.connect(host))
   if (res.ok) return
   if (res.errorCode === 'host_key_unknown') {
     dialog.warning({
@@ -249,7 +253,7 @@ async function tryConnectHost(host: models.store.Host) {
       positiveText: t('tofu.trust'),
       negativeText: t('common.cancel'),
       onPositiveClick: async () => {
-        const r2 = await terminals.connect(host, 'add')
+        const r2 = await (split ? terminals.splitPane(host, 'add') : terminals.connect(host, 'add'))
         if (!r2.ok) message.error(r2.message || t('terminal.connectFailed'))
       },
     })
@@ -262,7 +266,7 @@ async function tryConnectHost(host: models.store.Host) {
       positiveText: t('tofu.replaceKey'),
       negativeText: t('common.cancel'),
       onPositiveClick: async () => {
-        const r2 = await terminals.connect(host, 'replace')
+        const r2 = await (split ? terminals.splitPane(host, 'replace') : terminals.connect(host, 'replace'))
         if (!r2.ok) message.error(r2.message || t('terminal.connectFailed'))
       },
     })

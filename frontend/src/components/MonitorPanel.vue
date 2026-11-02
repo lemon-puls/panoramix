@@ -18,7 +18,7 @@ const { t } = useI18n()
 const terminals = useTerminalsStore()
 
 const sessionId = computed(() => terminals.activeSessionId ?? '')
-const connected = computed(() => terminals.activeTab?.state === 'connected')
+const connected = computed(() => terminals.activePane?.state === 'connected')
 const stopped = ref(false)
 
 // 图表数据源（响应式引用，整体换新触发子组件更新）
