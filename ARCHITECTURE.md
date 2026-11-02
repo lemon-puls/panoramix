@@ -62,6 +62,8 @@
 M2 已追加：`ConnectHost(hostId, trustMode)`（trustMode: 空 / `add` / `replace`，
 对应 TOFU 的"信任未知指纹 / 确认指纹变更"二次连接）、`CloseSession /
 WriteSession / ResizeSession / IsSessionLogEnabled / SetSessionLogEnabled`；
+v0.2 追加：`ScanImportDir(source, dir) / ImportHosts(previews)`（Xshell 与
+FinalShell 统一导入）、`IsSessionLogEnabled / SetSessionLogEnabled`；
 M3 已追加：`SftpListDir / SftpHome / SftpMkdir / SftpRemove / SftpRename /
 SftpUpload / SftpDownload / ListTransfers / TransferCancel / TransferRetry /
 SetTransferPolicy / PickUploadFile / PickSavePath / PickDir`（后三个经

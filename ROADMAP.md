@@ -58,8 +58,12 @@
 - GPU：`nvidia-smi --query-gpu=csv` 探测，检测不到则隐藏整个卡片
 - 采样：默认 2s 可配；失败静默降级（回退 `top`/`df` 解析），不报错刷屏
 - 呈现：uPlot 实时曲线 + 内存环形缓冲（最近 1 小时，断开即弃；不落盘）
-- 终端补强：rz/sz、分屏、FinalShell 导入、SSH agent 与跳板链（ProxyJump）、expect 式登录脚本、
-  SFTP 暂停恢复/限速（断点续传已随 M3 提前实现：取消/失败保留断点，重试或重传自动续）、双面板 + 终端 cwd 联动、远程编辑、en-US 文案
+- ✅ 系统监控（`/proc` 采集、GPU 探测、ECharts 实时曲线、2×2 指标卡）
+- ✅ FinalShell 导入（conn/*_connect_config.json，仅非敏感字段）
+- ✅ SSH agent 认证（Unix SSH_AUTH_SOCK / Windows OpenSSH agent 命名管道）
+- ✅ 跳板链 ProxyJump（最多 3 跳，逐跳 TOFU 校验，环检测）
+- 待办：rz/sz、分屏、expect 式登录脚本、SFTP 暂停恢复/限速（断点续传已随 M3 实现）、
+  双面板 + 终端 cwd 联动、远程编辑、en-US 文案
 
 ## v0.3 —— 数据库与 Redis
 

@@ -10,10 +10,11 @@ Currently pre-release, under active development.
 
 | 模块 | 状态 |
 | --- | --- |
-| SSH 终端（多标签、TOFU 指纹、keepalive、自动重连、会话日志、命令片段） | ✅ v0.1 |
-| 连接管理（分组树、搜索、克隆、**Xshell 导入**） | ✅ v0.1 |
+| SSH 终端（多标签、TOFU、keepalive、自动重连、会话日志、命令片段） | ✅ v0.1 |
+| 连接管理（分组树、搜索、克隆、**跳板链**、**SSH Agent**） | ✅ v0.2 |
+| 迁移导入（**Xshell** 与 **FinalShell** 批量导入） | ✅ v0.2 |
 | SFTP 文件传输（并发队列、**断点续传**、覆盖策略、递归、拖拽上传） | ✅ v0.1 |
-| 系统监控（`/proc` 采集、GPU 探测） | 📅 v0.2 |
+| 系统监控（`/proc` 采集、GPU 探测、实时曲线） | ✅ v0.2 |
 | MySQL + Redis 管理 | 📅 v0.3 |
 | K3s/K8s 面板（经 SSH 自动发现） | 📅 v0.4 |
 | AI 运维 | 💡 v0.5+ |
@@ -25,14 +26,18 @@ Currently pre-release, under active development.
 前往 [Releases](https://github.com/lemon-puls/panoramix/releases) 下载 Windows 便携版
 （单 exe + zip，解压即用）。国内访问可经 Gitee 镜像阅读源码（镜像地址见下）。
 
-## 从 Xshell 迁移
+## 从 Xshell / FinalShell 迁移
 
-连接管理器内置 Xshell 会话批量导入（工具栏「从 Xshell 导入」→ 选择
-Xshell 会话目录，如 `%USERPROFILE%\Documents\NetSarang\Xshell\Sessions`）。
+连接管理器工具栏「从 Xshell 导入」支持两种来源批量迁移：
 
-> **重要**：仅迁移 主机 / 端口 / 用户名 / 认证方式。Xshell 的密码在本机加密
-> 存储、物理上不可解密，密钥（.xpk）为专有加密格式亦不可直接使用——导入的
-> 主机首次连接时会自动弹出凭据补录窗口，填写后立即重连。
+| 来源 | 配置目录 |
+| --- | --- |
+| Xshell | `%USERPROFILE%\Documents\NetSarang\Xshell\Sessions`（`*.xsh`） |
+| FinalShell | `%APPDATA%\finalshell\conn`（`*_connect_config.json`） |
+
+> **重要**：仅迁移 名称 / 主机 / 端口 / 用户名 / 认证方式。两家的密码均在本机
+> 加密存储、密钥为专有格式，物理上不可解密迁移——导入的主机首次连接时会弹
+> 出凭据补录窗口，填写后立即重连。
 
 ## 本地开发
 
