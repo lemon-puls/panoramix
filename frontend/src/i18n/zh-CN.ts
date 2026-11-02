@@ -56,9 +56,12 @@ export default {
   },
   settings: {
     sessionLog: '会话日志（按天落文件）',
+    cwdSync: '目录同步（bash，需重连生效）',
   },
   files: {
     toggle: '文件',
+    localPane: '本地',
+    remotePane: '远程',
     refresh: '刷新',
     mkdir: '新建目录',
     upload: '上传',

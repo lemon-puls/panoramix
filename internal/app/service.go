@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/lemon-puls/panoramix/internal/finalshell"
+	"github.com/lemon-puls/panoramix/internal/fsx"
 	"github.com/lemon-puls/panoramix/internal/monitor"
 	"github.com/lemon-puls/panoramix/internal/sftp"
 	"github.com/lemon-puls/panoramix/internal/ssh"
@@ -95,7 +96,7 @@ type ConnectHostResult struct {
 
 // buildConnectConfig 组装单台主机的连接配置（含从 keychain 取凭据）。
 // 返回非 nil 的 ConnectHostResult 表示组装失败（错误码已归类）。
-func (s *Service) buildConnectConfig(h *store.Host, trustMode string, sessionLog bool) (*ssh.ConnectConfig, *ConnectHostResult) {
+func (s *Service) buildConnectConfig(h *store.Host, trustMode string, sessionLog, isJump bool) (*ssh.ConnectConfig, *ConnectHostResult) {
 	cfg := &ssh.ConnectConfig{
 		HostID:        h.ID,
 		Name:          h.Name,
@@ -112,6 +113,10 @@ func (s *Service) buildConnectConfig(h *store.Host, trustMode string, sessionLog
 		TrustMode:     trustMode,
 	}
 	// 凭据在连接瞬间从 keychain 解出；Start 返回后由调用方立即清空
+	// 目录同步：追加 OSC 7 上报命令（只注入目标主机，跳板机不注入）
+	if !isJump && s.cwdSyncEnabled() {
+		cfg.InitCommands = append(append([]string{}, h.InitCommands...), cwdSyncCommand)
+	}
 	switch cfg.AuthType {
 	case "password", "keyboard_interactive":
 		pw, err := s.secrets.GetSecret(store.HostPasswordRef(h.ID))
@@ -136,6 +141,34 @@ func (s *Service) buildConnectConfig(h *store.Host, trustMode string, sessionLog
 			Message: "unsupported auth type: " + cfg.AuthType}
 	}
 	return cfg, nil
+}
+
+// cwdSyncCommand bash 目录同步注入：每次提示符前用 OSC 7 上报 PWD。
+// 文件面板据此跟随终端当前目录（仅 bash；zsh 用户可自行配置 precmd）
+const cwdSyncCommand = `export PROMPT_COMMAND='printf "\033]7;file://%s%s\a" "$HOSTNAME" "$PWD"'`
+
+// IsCwdSyncEnabled 目录同步开关（settings 持久化，默认关闭）
+func (s *Service) IsCwdSyncEnabled() (bool, error) {
+	v, ok, err := s.store.GetSetting("cwd_sync_enabled")
+	if err != nil || !ok {
+		return false, err
+	}
+	return v == "1", nil
+}
+
+// SetCwdSyncEnabled 开关目录同步（对新连接生效）
+func (s *Service) SetCwdSyncEnabled(on bool) error {
+	v := "0"
+	if on {
+		v = "1"
+	}
+	log.Printf("[app] cwd sync enabled=%v", on)
+	return s.store.SetSetting("cwd_sync_enabled", v)
+}
+
+func (s *Service) cwdSyncEnabled() bool {
+	on, err := s.IsCwdSyncEnabled()
+	return err == nil && on
 }
 
 // toSSHLoginScript 把存储层的登录脚本转换为 ssh 包的结构（依赖方向保持单向）
@@ -179,7 +212,7 @@ func (s *Service) ConnectHost(hostID string, trustMode string) ConnectHostResult
 		return ConnectHostResult{ErrorCode: "connect_failed", Message: "host not found"}
 	}
 
-	cfg, cErr := s.buildConnectConfig(h, trustMode, s.sessionLogEnabled())
+	cfg, cErr := s.buildConnectConfig(h, trustMode, s.sessionLogEnabled(), false)
 	if cErr != nil {
 		return *cErr
 	}
@@ -206,7 +239,7 @@ func (s *Service) ConnectHost(hostID string, trustMode string) ConnectHostResult
 					Message: "proxy chain contains a cycle"}
 			}
 			seen[jh.ID] = true
-			jcfg, jErr := s.buildConnectConfig(jh, trustMode, false)
+			jcfg, jErr := s.buildConnectConfig(jh, trustMode, false, true)
 			if jErr != nil {
 				return *jErr
 			}
@@ -750,6 +783,23 @@ func (s *Service) PickDir() (string, error) {
 		return "", fmt.Errorf("dialog not ready")
 	}
 	return s.dialog.PickDirectory()
+}
+
+// ---------- 本地文件浏览（双面板） ----------
+
+// LocalHome 返回用户主目录
+func (s *Service) LocalHome() string {
+	return fsx.Home()
+}
+
+// LocalListDir 列本地目录（dir 为空取主目录）
+func (s *Service) LocalListDir(dir string) ([]fsx.Entry, error) {
+	return fsx.ListDir(dir)
+}
+
+// LocalParent 返回父目录
+func (s *Service) LocalParent(dir string) string {
+	return fsx.Parent(dir)
 }
 
 // ---------- 远程编辑 ----------

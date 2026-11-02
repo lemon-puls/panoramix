@@ -56,6 +56,15 @@ panoramix/
 2. 提交前必须通过：`go vet ./...` 与 `go test ./...`
 3. Windows 产物编译校验：`GOOS=windows go build ./...`
 
+## 前端绑定维护
+
+`frontend/wailsjs/go/` 由 Wails CLI 生成，开发中手写的同名导出会与生成内容
+重复（Rollup 报 "Identifier X has already been declared"）。改绑定后运行：
+
+```bash
+python3 scripts/dedupe_bindings.py
+```
+
 ## 代码提交规范
 
 1. 完成代码编写后，你需要自行提交代码；如果还没有专门分支，则需创建新分支，

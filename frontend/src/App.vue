@@ -78,7 +78,7 @@ onMounted(async () => {
                   <p class="hint">{{ t('app.m2Hint') }}</p>
                 </div>
               </div>
-              <FilePanel v-if="files.showPanel && terminals.tabs.length > 0" class="files-area" />
+              <FilePanel v-if="files.showPanel && terminals.tabs.length > 0" class="files-area dual" />
               <MonitorPanel v-else-if="monitor.showPanel && terminals.tabs.length > 0" class="files-area" />
             </div>
           </n-layout-content>
@@ -109,8 +109,12 @@ onMounted(async () => {
 .files-area {
   width: 380px;
   flex-shrink: 0;
+  transition: width 0.2s;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 4px;
+}
+.files-area.dual {
+  width: 640px;
 }
 .tree-area {
   flex: 1;

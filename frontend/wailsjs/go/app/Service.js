@@ -38,6 +38,10 @@ export function ImportHosts(arg1) {
   return window['go']['app']['Service']['ImportHosts'](arg1);
 }
 
+export function IsCwdSyncEnabled() {
+  return window['go']['app']['Service']['IsCwdSyncEnabled']();
+}
+
 export function IsSessionLogEnabled() {
   return window['go']['app']['Service']['IsSessionLogEnabled']();
 }
@@ -60,6 +64,18 @@ export function ListSnippets() {
 
 export function ListTransfers() {
   return window['go']['app']['Service']['ListTransfers']();
+}
+
+export function LocalHome() {
+  return window['go']['app']['Service']['LocalHome']();
+}
+
+export function LocalListDir(arg1) {
+  return window['go']['app']['Service']['LocalListDir'](arg1);
+}
+
+export function LocalParent(arg1) {
+  return window['go']['app']['Service']['LocalParent'](arg1);
 }
 
 export function PauseTransfer(arg1) {
@@ -112,6 +128,10 @@ export function SaveSnippet(arg1) {
 
 export function ScanImportDir(arg1, arg2) {
   return window['go']['app']['Service']['ScanImportDir'](arg1, arg2);
+}
+
+export function SetCwdSyncEnabled(arg1) {
+  return window['go']['app']['Service']['SetCwdSyncEnabled'](arg1);
 }
 
 export function SetHostSecret(arg1, arg2, arg3) {

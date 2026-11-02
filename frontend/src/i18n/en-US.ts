@@ -57,10 +57,13 @@ export default {
   },
   settings: {
     sessionLog: 'Session log (daily files)',
+    cwdSync: 'Directory sync (bash, applies on reconnect)',
     language: 'Language',
   },
   files: {
     toggle: 'Files',
+    localPane: 'Local',
+    remotePane: 'Remote',
     refresh: 'Refresh',
     mkdir: 'New Folder',
     upload: 'Upload',

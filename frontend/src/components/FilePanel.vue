@@ -26,6 +26,7 @@ const connected = computed(() => terminals.activePane?.state === 'connected')
 onMounted(() => {
   edits.ensureBus()
   void edits.refresh()
+  void files.loadLocal('')
   void transfers.ensureSeeded()
   // 拖拽文件到面板 → 上传到当前目录（Wails 全局文件拖放）
   OnFileDrop((_x, _y, paths) => {
@@ -268,6 +269,47 @@ async function onMenuSelectQuick(key: string, entry: models.sftp.RemoteEntry) {
   await onMenuSelect(key)
 }
 
+// ---------- 双面板拖拽 ----------
+
+// 拖拽中的条目（HTML5 dataTransfer 不能携带本地路径，用内部状态传递）
+const dragLocal = ref<models.fsx.Entry | null>(null)
+const dragRemote = ref<models.sftp.RemoteEntry | null>(null)
+
+function onLocalDragStart(e: models.fsx.Entry) {
+  dragLocal.value = e
+  dragRemote.value = null
+}
+
+function onRemoteDragStart(e: models.sftp.RemoteEntry) {
+  dragRemote.value = e
+  dragLocal.value = null
+}
+
+// 本地 → 远程：上传
+async function onDropToRemote() {
+  const e = dragLocal.value
+  if (!e || !sessionId.value || !connected.value) return
+  dragLocal.value = null
+  try {
+    await files.uploadPaths(sessionId.value, files.cwd, [e.path])
+    message.success(t('files.dropQueued', { n: 1 }))
+  } catch (err) {
+    message.error(String(err))
+  }
+}
+
+// 远程 → 本地：下载到本地面板当前目录
+async function onDropToLocal() {
+  const e = dragRemote.value
+  if (!e || !sessionId.value || !connected.value) return
+  dragRemote.value = null
+  try {
+    await files.downloadToLocal(sessionId.value, e)
+  } catch (err) {
+    message.error(String(err))
+  }
+}
+
 function fmtMtime(v: unknown): string {
   if (typeof v !== 'string') return ''
   return v.slice(0, 16).replace('T', ' ')
@@ -275,10 +317,58 @@ function fmtMtime(v: unknown): string {
 </script>
 
 <template>
-  <div
-    class="file-panel"
-    @dragover.prevent
-  >
+  <div class="file-panel" @dragover.prevent>
+    <!-- 本地栏 -->
+    <div
+      class="pane local-pane"
+      @dragover.prevent
+      @drop.prevent="onDropToLocal"
+    >
+      <div class="pane-title">{{ t('files.localPane') }}</div>
+      <div class="crumbs">
+        <span class="crumb" @click="files.localUp()">↑</span>
+        <span class="crumb path" :title="files.localCwd">{{ files.localCwd }}</span>
+        <n-button size="tiny" quaternary @click="files.loadLocal(files.localCwd)">
+          ⟳
+        </n-button>
+      </div>
+      <div class="local-commands">
+        <n-button
+          size="tiny"
+          :disabled="!connected"
+          @click="files.uploadFiles(sessionId, files.cwd)"
+        >
+          {{ t('files.upload') }}
+        </n-button>
+        <n-button
+          size="tiny"
+          :disabled="!connected"
+          @click="files.uploadDir(sessionId, files.cwd)"
+        >
+          {{ t('files.uploadDir') }}
+        </n-button>
+      </div>
+      <n-spin :show="files.localLoading" size="small">
+        <div class="list">
+          <div
+            v-for="e in files.localEntries"
+            :key="e.path"
+            class="row"
+            draggable="true"
+            @dragstart="onLocalDragStart(e)"
+            @dblclick="e.isDir ? files.localEnter(e.path) : undefined"
+          >
+            <span class="icon">{{ e.isDir ? '📁' : '📄' }}</span>
+            <span class="name" :class="{ dir: e.isDir }">{{ e.name }}</span>
+            <span class="size">{{ e.isDir ? '' : formatSize(e.size) }}</span>
+          </div>
+        </div>
+      </n-spin>
+    </div>
+
+    <!-- 远程栏 -->
+    <div class="pane remote-pane" @dragover.prevent @drop.prevent="onDropToRemote">
+      <div class="pane-title">{{ t('files.remotePane') }}</div>
     <div class="panel-head">
       <div class="crumbs">
         <span
@@ -304,22 +394,6 @@ function fmtMtime(v: unknown): string {
         <n-button size="tiny" :disabled="!connected" @click="mkdirModal.show = true">
           {{ t('files.mkdir') }}
         </n-button>
-        <n-button
-          size="tiny"
-          type="primary"
-          :disabled="!connected"
-          @click="sessionId && files.uploadFiles(sessionId, files.cwd)"
-        >
-          {{ t('files.upload') }}
-        </n-button>
-        <n-button
-          size="tiny"
-          type="primary"
-          :disabled="!connected"
-          @click="sessionId && files.uploadDir(sessionId, files.cwd)"
-        >
-          {{ t('files.uploadDir') }}
-        </n-button>
       </div>
     </div>
 
@@ -335,6 +409,8 @@ function fmtMtime(v: unknown): string {
           v-for="e in files.entries"
           :key="e.path"
           class="row"
+          draggable="true"
+          @dragstart="onRemoteDragStart(e)"
           @dblclick="dblclickEntry(e)"
           @contextmenu="openMenu($event, e)"
         >
@@ -345,6 +421,8 @@ function fmtMtime(v: unknown): string {
         </div>
       </div>
     </n-spin>
+
+    </div>
 
     <div class="transfers">
       <div class="transfers-head">{{ t('transfers.title') }} ({{ sessionTasks.length }})</div>
@@ -455,6 +533,34 @@ function fmtMtime(v: unknown): string {
   height: 100%;
   gap: 6px;
   padding: 10px;
+}
+.pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pane + .pane {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 6px;
+}
+.pane-title {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+.local-commands {
+  display: flex;
+  gap: 6px;
+}
+.crumb.path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
 }
 .panel-head {
   display: flex;

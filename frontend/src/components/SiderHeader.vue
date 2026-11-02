@@ -6,7 +6,9 @@ import { NButton, NInputNumber, NPopover, NSelect, NSwitch } from 'naive-ui'
 import { SUPPORTED_LOCALES, setLocale, type LocaleCode } from '../i18n'
 import {
   GetTransferSpeedLimit,
+  IsCwdSyncEnabled,
   IsSessionLogEnabled,
+  SetCwdSyncEnabled,
   SetSessionLogEnabled,
   SetTransferSpeedLimit,
 } from '../../wailsjs/go/app/Service'
@@ -18,6 +20,7 @@ const message = useMessage()
 
 const logEnabled = ref(false)
 const speedLimit = ref<number>(0)
+const cwdSync = ref(false)
 const locale = ref<LocaleCode>(currentLocale())
 
 // 语言选项（模板不接受类型断言，这里转为普通数组）
@@ -39,7 +42,17 @@ function onLocaleChange(v: LocaleCode) {
 onMounted(async () => {
   logEnabled.value = await IsSessionLogEnabled().catch(() => false)
   speedLimit.value = await GetTransferSpeedLimit().catch(() => 0)
+  cwdSync.value = await IsCwdSyncEnabled().catch(() => false)
 })
+
+async function onCwdSyncChange(v: boolean) {
+  try {
+    await SetCwdSyncEnabled(v)
+    message.success(t('common.saved'))
+  } catch (e) {
+    message.error(String(e))
+  }
+}
 
 async function onSpeedLimitChange(v: number | null) {
   const kbps = v ?? 0
@@ -83,6 +96,10 @@ async function onToggleLog(on: boolean) {
             style="width: 120px"
             @update:value="onLocaleChange"
           />
+        </div>
+        <div class="settings-row">
+          <span>{{ t('settings.cwdSync') }}</span>
+          <n-switch v-model:value="cwdSync" size="small" @update:value="onCwdSyncChange" />
         </div>
         <div class="settings-row">
           <span>{{ t('transfers.speedLimit') }}</span>

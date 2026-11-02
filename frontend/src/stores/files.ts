@@ -2,6 +2,9 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import * as models from '../../wailsjs/go/models'
 import {
+  LocalHome,
+  LocalListDir,
+  LocalParent,
   PickDir,
   PickSavePath,
   PickUploadFile,
@@ -21,6 +24,11 @@ export const useFilesStore = defineStore('files', () => {
   const entries = ref<models.sftp.RemoteEntry[]>([])
   const loading = ref(false)
   const showPanel = ref(false)
+
+  // 本地栏（双面板）
+  const localCwd = ref('')
+  const localEntries = ref<models.fsx.Entry[]>([])
+  const localLoading = ref(false)
 
   async function load(sessionId: string, dir: string) {
     loading.value = true
@@ -107,11 +115,62 @@ export const useFilesStore = defineStore('files', () => {
     }
   }
 
+  // ---------- 本地栏 ----------
+
+  async function loadLocal(dir: string) {
+    localLoading.value = true
+    try {
+      const target = dir || (await LocalHome())
+      const list = await LocalListDir(target)
+      localEntries.value = list ?? []
+      localCwd.value = target
+    } finally {
+      localLoading.value = false
+    }
+  }
+
+  async function localEnter(dir: string) {
+    await loadLocal(dir)
+  }
+
+  async function localUp() {
+    if (!localCwd.value) return
+    await loadLocal(await LocalParent(localCwd.value))
+  }
+
+  // onTerminalCwd 终端 OSC 7 上报当前目录 → 文件面板跟随（需开启目录同步）
+  let cwdTimer: ReturnType<typeof setTimeout> | null = null
+  function onTerminalCwd(sessionId: string, path: string) {
+    if (!showPanel.value || !path) return
+    if (cwd.value === path) return
+    // 防抖：连续 cd 只刷新最后一次
+    if (cwdTimer) clearTimeout(cwdTimer)
+    cwdTimer = setTimeout(() => {
+      void load(sessionId, path).catch(() => {
+        // 目录不可读（权限/已删除）时保持原状
+      })
+    }, 250)
+  }
+
+  // downloadToLocal 远程条目下载到本地当前目录
+  async function downloadToLocal(sessionId: string, entry: models.sftp.RemoteEntry) {
+    if (!localCwd.value) return
+    await SftpDownload(sessionId, entry.path, localCwd.value)
+  }
+
   return {
     cwd,
     entries,
     loading,
     showPanel,
+    localCwd,
+    localEntries,
+    localLoading,
+    loadLocal,
+    localEnter,
+    localUp,
+    downloadToLocal,
+    onTerminalCwd,
     load,
     reload,
     enter,
