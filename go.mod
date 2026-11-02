@@ -5,6 +5,8 @@ go 1.27.3
 require (
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/creack/pty v1.1.24
+	github.com/fsnotify/fsnotify v1.10.1
+	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
 	github.com/pkg/sftp v1.13.12
 	github.com/wailsapp/wails/v2 v2.17.0
 	github.com/zalando/go-keyring v0.2.8
@@ -33,7 +35,6 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
-	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect

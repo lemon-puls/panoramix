@@ -145,9 +145,10 @@ type dialSource struct{ client *gossh.Client }
 func (s dialSource) Client(string) (*gossh.Client, error) { return s.client, nil }
 
 type captureEmitter struct {
-	mu        sync.Mutex
-	conflicts []map[string]interface{}
-	progress  int
+	mu         sync.Mutex
+	conflicts  []map[string]interface{}
+	progress   int
+	editEvents []map[string]interface{}
 }
 
 func (e *captureEmitter) Emit(event string, data ...interface{}) {
@@ -162,6 +163,8 @@ func (e *captureEmitter) Emit(event string, data ...interface{}) {
 		e.conflicts = append(e.conflicts, m)
 	case "transfer:progress":
 		e.progress++
+	case "edit:state":
+		e.editEvents = append(e.editEvents, m)
 	}
 }
 

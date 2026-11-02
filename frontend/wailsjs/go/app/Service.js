@@ -26,6 +26,10 @@ export function DeleteSnippet(arg1) {
   return window['go']['app']['Service']['DeleteSnippet'](arg1);
 }
 
+export function FinishRemoteEdit(arg1) {
+  return window['go']['app']['Service']['FinishRemoteEdit'](arg1);
+}
+
 export function ImportHosts(arg1) {
   return window['go']['app']['Service']['ImportHosts'](arg1);
 }
@@ -40,6 +44,10 @@ export function ListGroups() {
 
 export function ListHosts() {
   return window['go']['app']['Service']['ListHosts']();
+}
+
+export function ListRemoteEdits() {
+  return window['go']['app']['Service']['ListRemoteEdits']();
 }
 
 export function ListSnippets() {
@@ -72,6 +80,10 @@ export function Ping() {
 
 export function ResizeSession(arg1, arg2, arg3) {
   return window['go']['app']['Service']['ResizeSession'](arg1, arg2, arg3);
+}
+
+export function ResolveEditConflict(arg1, arg2) {
+  return window['go']['app']['Service']['ResolveEditConflict'](arg1, arg2);
 }
 
 export function SaveGroup(arg1) {
@@ -128,6 +140,10 @@ export function SftpRename(arg1, arg2, arg3) {
 
 export function SftpUpload(arg1, arg2, arg3) {
   return window['go']['app']['Service']['SftpUpload'](arg1, arg2, arg3);
+}
+
+export function StartRemoteEdit(arg1, arg2) {
+  return window['go']['app']['Service']['StartRemoteEdit'](arg1, arg2);
 }
 
 export function TransferCancel(arg1) {

@@ -16,6 +16,8 @@ export function DeleteHostSecret(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteSnippet(arg1:string):Promise<void>;
 
+export function FinishRemoteEdit(arg1:string):Promise<void>;
+
 export function ImportHosts(arg1:Array<app.ImportPreview>):Promise<number>;
 
 export function IsSessionLogEnabled():Promise<boolean>;
@@ -23,6 +25,8 @@ export function IsSessionLogEnabled():Promise<boolean>;
 export function ListGroups():Promise<Array<store.Group>>;
 
 export function ListHosts():Promise<Array<store.Host>>;
+
+export function ListRemoteEdits():Promise<Array<sftp.EditInfo>>;
 
 export function ListSnippets():Promise<Array<store.Snippet>>;
 
@@ -39,6 +43,8 @@ export function PickUploadFiles():Promise<Array<string>>;
 export function Ping():Promise<string>;
 
 export function ResizeSession(arg1:string,arg2:number,arg3:number):Promise<void>;
+
+export function ResolveEditConflict(arg1:string,arg2:boolean):Promise<void>;
 
 export function SaveGroup(arg1:store.Group):Promise<store.Group>;
 
@@ -67,6 +73,8 @@ export function SftpRemove(arg1:string,arg2:string):Promise<void>;
 export function SftpRename(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SftpUpload(arg1:string,arg2:string,arg3:string):Promise<string>;
+
+export function StartRemoteEdit(arg1:string,arg2:string):Promise<sftp.EditInfo>;
 
 export function TransferCancel(arg1:string):Promise<void>;
 

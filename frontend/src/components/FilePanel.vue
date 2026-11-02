@@ -6,6 +6,7 @@ import { NButton, NDropdown, NEmpty, NInput, NModal, NSpin } from 'naive-ui'
 import { OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
 import { useFilesStore } from '../stores/files'
 import { useTerminalsStore } from '../stores/terminals'
+import { useEditsStore, type EditEvent } from '../stores/edits'
 import { useTransfersStore, formatSize, type ConflictInfo } from '../stores/transfers'
 import * as models from '../../wailsjs/go/models'
 
@@ -16,11 +17,14 @@ const dialog = useDialog()
 const files = useFilesStore()
 const terminals = useTerminalsStore()
 const transfers = useTransfersStore()
+const edits = useEditsStore()
 
 const sessionId = computed(() => terminals.activeSessionId ?? '')
 const connected = computed(() => terminals.activeTab?.state === 'connected')
 
 onMounted(() => {
+  edits.ensureBus()
+  void edits.refresh()
   void transfers.ensureSeeded()
   // 拖拽文件到面板 → 上传到当前目录（Wails 全局文件拖放）
   OnFileDrop((_x, _y, paths) => {
@@ -82,6 +86,7 @@ const menuOptions = computed(() => {
     ]
   }
   return [
+    { label: t('files.edit'), key: 'edit' },
     { label: t('files.download'), key: 'download' },
     { label: t('menu.rename'), key: 'rename' },
     { label: t('menu.delete'), key: 'remove', props: { style: 'color: #e88080' } },
@@ -96,6 +101,12 @@ async function onMenuSelect(key: string) {
     switch (key) {
       case 'open':
         await files.enter(sessionId.value, entry.path)
+        break
+      case 'edit':
+        if (!entry.isDir && sessionId.value) {
+          await edits.edit(sessionId.value, entry.path)
+          message.success(t('files.editStarted', { name: entry.name }))
+        }
         break
       case 'download':
         if (entry.isDir) {
@@ -201,6 +212,36 @@ async function resolveConflict(mode: string) {
     conflict.info = next
     conflict.applyAll = conflict.applyAll // 沿用"全部应用"选择
     conflict.show = true
+  }
+}
+
+// ---------- 编辑冲突 ----------
+
+const editConflict = reactive({ show: false, ev: null as EditEvent | null })
+const editDismissed = new Set<string>()
+
+watch(
+  () => edits.conflicts.length,
+  () => {
+    if (editConflict.show) return
+    const next = edits.conflicts.find((c) => !editDismissed.has(c.id))
+    if (next) {
+      editConflict.ev = next
+      editConflict.show = true
+    }
+  },
+)
+
+async function resolveEdit(overwrite: boolean) {
+  const ev = editConflict.ev
+  if (!ev) return
+  editDismissed.add(ev.id)
+  editConflict.show = false
+  try {
+    await edits.resolve(ev.id, overwrite)
+    message.success(overwrite ? t('files.editOverwritten') : t('files.editReloaded'))
+  } catch (e) {
+    message.error(String(e))
   }
 }
 
@@ -366,6 +407,15 @@ function fmtMtime(v: unknown): string {
       <div class="modal-actions">
         <n-button quaternary @click="renameModal.show = false">{{ t('common.cancel') }}</n-button>
         <n-button type="primary" :loading="saving" @click="doRename">{{ t('common.save') }}</n-button>
+      </div>
+    </n-modal>
+
+    <n-modal v-model:show="editConflict.show" preset="card" :title="t('files.editConflictTitle')" style="width: 460px">
+      <p class="conflict-path">{{ editConflict.ev?.remotePath }}</p>
+      <p class="conflict-tip">{{ t('files.editConflictTip') }}</p>
+      <div class="conflict-actions">
+        <n-button type="warning" @click="resolveEdit(true)">{{ t('files.editOverwrite') }}</n-button>
+        <n-button quaternary @click="resolveEdit(false)">{{ t('files.editReload') }}</n-button>
       </div>
     </n-modal>
 

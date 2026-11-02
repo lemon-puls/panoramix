@@ -42,6 +42,7 @@ type Service struct {
 	emitter   Emitter
 	ssh       *ssh.Manager
 	transfers *sftp.Queue
+	editor    *sftp.Editor
 	dialog    Dialoger
 
 	samplersMu sync.Mutex
@@ -50,13 +51,14 @@ type Service struct {
 
 // NewService 组装服务层
 func NewService(st store.Store, sec store.SecretStore, em Emitter, mgr *ssh.Manager,
-	transfers *sftp.Queue, dlg Dialoger) *Service {
+	transfers *sftp.Queue, editor *sftp.Editor, dlg Dialoger) *Service {
 	return &Service{
 		store:     st,
 		secrets:   sec,
 		emitter:   em,
 		ssh:       mgr,
 		transfers: transfers,
+		editor:    editor,
 		dialog:    dlg,
 		samplers:  map[string]*monitor.Sampler{},
 	}
@@ -687,6 +689,40 @@ func (s *Service) PickDir() (string, error) {
 		return "", fmt.Errorf("dialog not ready")
 	}
 	return s.dialog.PickDirectory()
+}
+
+// ---------- 远程编辑 ----------
+
+// StartRemoteEdit 下载远程文件到临时目录并用系统编辑器打开
+func (s *Service) StartRemoteEdit(sessionID, remotePath string) (sftp.EditInfo, error) {
+	if s.editor == nil {
+		return sftp.EditInfo{}, fmt.Errorf("editor not ready")
+	}
+	return s.editor.StartEdit(sessionID, remotePath)
+}
+
+// FinishRemoteEdit 结束编辑会话并清理临时文件
+func (s *Service) FinishRemoteEdit(editID string) error {
+	if s.editor == nil {
+		return fmt.Errorf("editor not ready")
+	}
+	return s.editor.FinishEdit(editID)
+}
+
+// ResolveEditConflict 处理编辑冲突：overwrite=true 覆盖远程，false 重新加载远程版本
+func (s *Service) ResolveEditConflict(editID string, overwrite bool) error {
+	if s.editor == nil {
+		return fmt.Errorf("editor not ready")
+	}
+	return s.editor.ResolveConflict(editID, overwrite)
+}
+
+// ListRemoteEdits 返回全部编辑会话（前端打开面板时填充）
+func (s *Service) ListRemoteEdits() []sftp.EditInfo {
+	if s.editor == nil {
+		return nil
+	}
+	return s.editor.ListEdits()
 }
 
 // ---------- 第三方客户端导入（Xshell / FinalShell） ----------

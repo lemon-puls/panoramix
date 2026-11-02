@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/pkg/browser"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -80,6 +81,11 @@ func (d *wailsDialoger) PickDirectory() (string, error) {
 	})
 }
 
+// OpenFile 用系统默认程序打开文件（远程编辑用）
+func (d *wailsDialoger) OpenFile(path string) error {
+	return browser.OpenFile(path)
+}
+
 func main() {
 	// 打开本地存储（SQLite）；凭据不落库，另存系统 keychain
 	st, err := store.Open(store.DefaultPath())
@@ -104,7 +110,11 @@ func main() {
 	// SFTP 传输队列：复用已连接会话，事件经同一 Emitter 推送
 	queue := sftp.NewQueue(mgr, em)
 
-	svc := app.NewService(st, secrets, em, mgr, queue, &wailsDialoger{em: em})
+	dlg := &wailsDialoger{em: em}
+	// 远程编辑器：下载 → 系统编辑器 → 保存自动回传（冲突检测）
+	editor := sftp.NewEditor(mgr, em, dlg, filepath.Join(store.ConfigDir(), "edit"))
+
+	svc := app.NewService(st, secrets, em, mgr, queue, editor, dlg)
 
 	if err := wails.Run(&options.App{
 		Title:            "Panoramix",

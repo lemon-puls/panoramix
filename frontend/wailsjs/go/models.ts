@@ -126,6 +126,30 @@ export namespace app {
 
 export namespace sftp {
 	
+	export class EditInfo {
+	    id: string;
+	    sessionId: string;
+	    remotePath: string;
+	    localPath: string;
+	    name: string;
+	    conflict: boolean;
+	    uploadedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.sessionId = source["sessionId"];
+	        this.remotePath = source["remotePath"];
+	        this.localPath = source["localPath"];
+	        this.name = source["name"];
+	        this.conflict = source["conflict"];
+	        this.uploadedAt = source["uploadedAt"];
+	    }
+	}
 	export class RemoteEntry {
 	    name: string;
 	    path: string;
