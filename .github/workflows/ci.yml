@@ -13,6 +13,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.3'
+      - name: 占位前端产物（main.go 的 go:embed 需要 frontend/dist 存在）
+        run: mkdir -p frontend/dist && touch frontend/dist/index.html
       - name: go vet
         run: go vet ./...
       - name: go test（含 SFTP/SSH 端到端用例）
