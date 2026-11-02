@@ -21,18 +21,17 @@ const sessionId = computed(() => terminals.activeSessionId ?? '')
 const connected = computed(() => terminals.activeTab?.state === 'connected')
 const stopped = ref(false)
 
-// uPlot 数据源（非响应式，靠 tick 通知刷新）
-const labels: number[] = []
-const cpuSeries: (number | null)[] = []
-const memSeries: (number | null)[] = []
-const netIn: (number | null)[] = []
-const netOut: (number | null)[] = []
-const ioR: (number | null)[] = []
-const ioW: (number | null)[] = []
+// uPlot 数据源：响应式引用（整体赋值触发 Sparkline 的 watch）
+const labels = ref<number[]>([])
+const cpuSeries = ref<(number | null)[]>([])
+const memSeries = ref<(number | null)[]>([])
+const netIn = ref<(number | null)[]>([])
+const netOut = ref<(number | null)[]>([])
+const ioR = ref<(number | null)[]>([])
+const ioW = ref<(number | null)[]>([])
 
 // 展示值（响应式）
 const now = ref<MonitorSample | null>(null)
-const tick = ref(0)
 
 function onSample(sid: string) {
   if (sid !== sessionId.value) return
@@ -41,25 +40,14 @@ function onSample(sid: string) {
   const last = arr.at(-1)
   if (!last) return
   now.value = last
-  // 以最新采样重建序列（环形缓冲即真相源，成本低：≤300 点）
-  labels.length = 0
-  cpuSeries.length = 0
-  memSeries.length = 0
-  netIn.length = 0
-  netOut.length = 0
-  ioR.length = 0
-  ioW.length = 0
-  for (const s of arr) {
-    labels.push(s.ts)
-    cpuSeries.push(round1(s.cpu.percent))
-    const memPct = s.mem.total > 0 ? (s.mem.used / s.mem.total) * 100 : 0
-    memSeries.push(round1(memPct))
-    netIn.push(round1(s.net.recvBps / 1024))
-    netOut.push(round1(s.net.sentBps / 1024))
-    ioR.push(round1(s.diskIo.readBps / 1024))
-    ioW.push(round1(s.diskIo.writeBps / 1024))
-  }
-  tick.value++
+  // 以最新采样整体重建序列（环形缓冲即真相源，≤300 点，成本可忽略）
+  labels.value = arr.map((s) => s.ts)
+  cpuSeries.value = arr.map((s) => round1(s.cpu.percent))
+  memSeries.value = arr.map((s) => round1(s.mem.total > 0 ? (s.mem.used / s.mem.total) * 100 : 0))
+  netIn.value = arr.map((s) => round1(s.net.recvBps / 1024))
+  netOut.value = arr.map((s) => round1(s.net.sentBps / 1024))
+  ioR.value = arr.map((s) => round1(s.diskIo.readBps / 1024))
+  ioW.value = arr.map((s) => round1(s.diskIo.writeBps / 1024))
 }
 
 function round1(v: number): number {
@@ -78,15 +66,14 @@ onBeforeUnmount(() => {
 watch(sessionId, (sid, old) => {
   if (old && old !== sid) {
     dropSession(old)
-    labels.length = 0
-    cpuSeries.length = 0
-    memSeries.length = 0
-    netIn.length = 0
-    netOut.length = 0
-    ioR.length = 0
-    ioW.length = 0
+    labels.value = []
+    cpuSeries.value = []
+    memSeries.value = []
+    netIn.value = []
+    netOut.value = []
+    ioR.value = []
+    ioW.value = []
     now.value = null
-    tick.value++
   }
 })
 

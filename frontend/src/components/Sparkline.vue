@@ -56,10 +56,12 @@ onMounted(() => {
   up = new uPlot(opts, buildData(), container.value)
 })
 
-// 数据或尺寸变化 → 重设
+// 数据更新 → 重设（父组件每次整体换新数组，监听引用而非 length——
+// 环形缓冲满后长度恒定，length 监听会停更）
 watch(
-  () => props.labels.length,
+  () => [props.labels, props.series],
   () => up?.setData(buildData()),
+  { flush: 'post' },
 )
 
 const ro = new ResizeObserver(() => {
