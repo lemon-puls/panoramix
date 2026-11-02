@@ -74,6 +74,10 @@ export function LocalListDir(arg1) {
   return window['go']['app']['Service']['LocalListDir'](arg1);
 }
 
+export function LocalRoots() {
+  return window['go']['app']['Service']['LocalRoots']();
+}
+
 export function LocalParent(arg1) {
   return window['go']['app']['Service']['LocalParent'](arg1);
 }

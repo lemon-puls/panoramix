@@ -33,6 +33,7 @@ const handlers = new Map<string, Handler[]>()
 // mock go 绑定：仅 preview 用（FilePanel 依赖本地/远程列目录与传输列表）
 const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   LocalHome: async () => '/home/demo',
+  LocalRoots: async () => ['C:\\', 'D:\\'],
   LocalParent: async (p: string) => p.split('/').slice(0, -1).join('/') || '/',
   LocalListDir: async () =>
     Array.from({ length: 14 }, (_, i) => ({

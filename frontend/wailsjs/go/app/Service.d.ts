@@ -43,6 +43,8 @@ export function LocalListDir(arg1:string):Promise<Array<fsx.Entry>>;
 
 export function LocalParent(arg1:string):Promise<string>;
 
+export function LocalRoots():Promise<Array<string>>;
+
 export function PauseTransfer(arg1:string):Promise<void>;
 
 export function PickDir():Promise<string>;

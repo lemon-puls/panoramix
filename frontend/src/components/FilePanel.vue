@@ -273,6 +273,35 @@ async function onMenuSelectQuick(key: string, entry: models.sftp.RemoteEntry) {
   await onMenuSelect(key)
 }
 
+// ---------- 本地路径跳转 ----------
+
+const localPathInput = ref('')
+const localRoot = ref('')
+
+// 同步当前目录到输入框（用户手工输入时不被覆盖）
+watch(
+  () => files.localCwd,
+  (v) => {
+    localPathInput.value = v
+    if (!localRoot.value && v) {
+      // Windows 盘符形如 "C:\..."；取前 3 位
+      localRoot.value = /^[A-Za-z]:\\/.test(v) ? v.slice(0, 3) : ''
+    }
+  },
+  { immediate: true },
+)
+
+async function gotoLocalPath() {
+  const target = localPathInput.value.trim()
+  if (!target) return
+  try {
+    await files.loadLocal(target)
+  } catch (e) {
+    message.error(String(e))
+    localPathInput.value = files.localCwd
+  }
+}
+
 // ---------- 双面板拖拽 ----------
 
 // 拖拽中的条目（HTML5 dataTransfer 不能携带本地路径，用内部状态传递）
@@ -329,9 +358,22 @@ function fmtMtime(v: unknown): string {
       @drop.prevent="onDropToLocal"
     >
       <div class="pane-title">{{ t('files.localPane') }}</div>
-      <div class="crumbs">
+      <div class="crumbs local-path-bar">
         <span class="crumb" @click="files.localUp()">↑</span>
-        <span class="crumb path" :title="files.localCwd">{{ files.localCwd }}</span>
+        <n-select
+          v-if="files.localRoots.length > 1"
+          v-model:value="localRoot"
+          size="tiny"
+          :options="files.localRoots.map((r) => ({ label: r, value: r }))"
+          style="width: 76px"
+          @update:value="(v: string) => files.loadLocal(v)"
+        />
+        <n-input
+          v-model:value="localPathInput"
+          size="tiny"
+          :placeholder="t('files.pathPlaceholder')"
+          @keyup.enter="gotoLocalPath"
+        />
         <n-button size="tiny" quaternary @click="files.loadLocal(files.localCwd)">
           ⟳
         </n-button>
@@ -577,6 +619,15 @@ function fmtMtime(v: unknown): string {
 .local-commands {
   display: flex;
   gap: 6px;
+}
+.local-path-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.local-path-bar :deep(.n-input) {
+  flex: 1;
+  min-width: 0;
 }
 .crumb.path {
   flex: 1;

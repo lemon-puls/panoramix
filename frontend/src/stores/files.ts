@@ -5,6 +5,7 @@ import {
   LocalHome,
   LocalListDir,
   LocalParent,
+  LocalRoots,
   PickDir,
   PickSavePath,
   PickUploadFile,
@@ -29,6 +30,7 @@ export const useFilesStore = defineStore('files', () => {
   const localCwd = ref('')
   const localEntries = ref<models.fsx.Entry[]>([])
   const localLoading = ref(false)
+  const localRoots = ref<string[]>([])
 
   async function load(sessionId: string, dir: string) {
     loading.value = true
@@ -119,6 +121,9 @@ export const useFilesStore = defineStore('files', () => {
 
   async function loadLocal(dir: string) {
     localLoading.value = true
+    if (localRoots.value.length === 0) {
+      localRoots.value = (await LocalRoots().catch(() => [])) ?? []
+    }
     try {
       const target = dir || (await LocalHome())
       const list = await LocalListDir(target)
@@ -166,6 +171,7 @@ export const useFilesStore = defineStore('files', () => {
     localCwd,
     localEntries,
     localLoading,
+    localRoots,
     loadLocal,
     localEnter,
     localUp,

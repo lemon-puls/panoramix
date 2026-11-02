@@ -802,6 +802,11 @@ func (s *Service) LocalParent(dir string) string {
 	return fsx.Parent(dir)
 }
 
+// LocalRoots 返回可用盘符/根（Windows 为 C:\、D:\ 等，Unix 为 /）
+func (s *Service) LocalRoots() []string {
+	return fsx.Roots()
+}
+
 // ---------- 远程编辑 ----------
 
 // StartRemoteEdit 下载远程文件到临时目录并用系统编辑器打开

@@ -63,6 +63,7 @@ export default {
   files: {
     toggle: '文件',
     localPane: '本地',
+    pathPlaceholder: '输入路径后回车跳转',
     remotePane: '远程',
     refresh: '刷新',
     mkdir: '新建目录',

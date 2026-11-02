@@ -65,6 +65,7 @@ export default {
   files: {
     toggle: 'Files',
     localPane: 'Local',
+    pathPlaceholder: 'Type a path and press Enter',
     remotePane: 'Remote',
     refresh: 'Refresh',
     mkdir: 'New Folder',
