@@ -91,7 +91,7 @@ onMounted(async () => {
   min-width: 0;
 }
 .files-area {
-  width: 340px;
+  width: 380px;
   flex-shrink: 0;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 4px;
