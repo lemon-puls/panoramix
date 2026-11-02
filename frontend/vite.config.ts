@@ -7,6 +7,12 @@ export default defineConfig({
   plugins: [vue()],
   // 5173 是 vite 默认端口，极易被其他项目的 dev server 占用
   // （且 WSL2 localhost 转发会跨系统占口）；Panoramix 固定用 5240
-  server: { port: 5240, strictPort: true },
+  // usePolling：WSL 访问 /mnt/d（Windows 盘）时 inotify 不可靠，轮询保证
+  // 文件变更能被 Vite 感知（代价很小；对 Windows 原生开发同样无害）
+  server: {
+    port: 5240,
+    strictPort: true,
+    watch: { usePolling: true, interval: 300 },
+  },
   build: { outDir: 'dist', emptyOutDir: true },
 })

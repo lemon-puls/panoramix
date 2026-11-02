@@ -37,7 +37,9 @@ function emit(name: string, payload: unknown) {
 async function main() {
   const { useTerminalsStore } = await import('./stores/terminals')
   const { default: MonitorPanel } = await import('./components/MonitorPanel.vue')
-  const { i18n } = await import('./i18n')
+  const { i18n, setLocale } = await import('./i18n')
+  const lang = new URLSearchParams(location.search).get('locale')
+  if (lang === 'en-US') setLocale('en-US')
 
   const pinia = createPinia()
   setActivePinia(pinia)

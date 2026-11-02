@@ -2,7 +2,8 @@
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
-import { NButton, NInputNumber, NPopover, NSwitch } from 'naive-ui'
+import { NButton, NInputNumber, NPopover, NSelect, NSwitch } from 'naive-ui'
+import { SUPPORTED_LOCALES, setLocale, type LocaleCode } from '../i18n'
 import {
   GetTransferSpeedLimit,
   IsSessionLogEnabled,
@@ -17,6 +18,23 @@ const message = useMessage()
 
 const logEnabled = ref(false)
 const speedLimit = ref<number>(0)
+const locale = ref<LocaleCode>(currentLocale())
+
+// 语言选项（模板不接受类型断言，这里转为普通数组）
+const localeOptions = SUPPORTED_LOCALES.map((l) => ({ label: l.label, value: l.value }))
+
+function currentLocale(): LocaleCode {
+  try {
+    const saved = localStorage.getItem('panoramix.locale')
+    return saved === 'en-US' ? 'en-US' : 'zh-CN'
+  } catch {
+    return 'zh-CN'
+  }
+}
+
+function onLocaleChange(v: LocaleCode) {
+  setLocale(v)
+}
 
 onMounted(async () => {
   logEnabled.value = await IsSessionLogEnabled().catch(() => false)
@@ -54,6 +72,17 @@ async function onToggleLog(on: boolean) {
         <div class="settings-row">
           <span>{{ t('settings.sessionLog') }}</span>
           <n-switch v-model:value="logEnabled" size="small" @update:value="onToggleLog" />
+        </div>
+        <div class="settings-row">
+          <span>{{ t('settings.language') }}</span>
+          <n-select
+            v-model:value="locale"
+            size="small"
+            :options="localeOptions"
+            :consistent-menu-width="false"
+            style="width: 120px"
+            @update:value="onLocaleChange"
+          />
         </div>
         <div class="settings-row">
           <span>{{ t('transfers.speedLimit') }}</span>

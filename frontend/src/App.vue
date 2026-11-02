@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   darkTheme,
+  dateEnUS,
   dateZhCN,
+  enUS,
   NConfigProvider,
   NDialogProvider,
   NLayout,
@@ -13,6 +15,7 @@ import {
   NTag,
   zhCN,
 } from 'naive-ui'
+import { i18n } from './i18n'
 import { Ping } from '../wailsjs/go/app/Service'
 import { useTerminalsStore } from './stores/terminals'
 import { useFilesStore } from './stores/files'
@@ -30,6 +33,11 @@ const files = useFilesStore()
 const monitor = useMonitorPanelStore()
 const bridgeOk = ref(false)
 
+// Naive UI 组件语言跟随 vue-i18n 当前 locale
+const isEn = computed(() => i18n.global.locale.value === 'en-US')
+const naiveLocale = computed(() => (isEn.value ? enUS : zhCN))
+const naiveDateLocale = computed(() => (isEn.value ? dateEnUS : dateZhCN))
+
 // M1 验收项：桥接自检，验证 Go ↔ WebView 通道
 onMounted(async () => {
   try {
@@ -41,7 +49,12 @@ onMounted(async () => {
 </script>
 
 <template>
-  <n-config-provider :theme="darkTheme" :locale="zhCN" :date-locale="dateZhCN" style="height: 100vh">
+  <n-config-provider
+    :theme="darkTheme"
+    :locale="naiveLocale"
+    :date-locale="naiveDateLocale"
+    style="height: 100vh"
+  >
     <n-message-provider>
       <n-dialog-provider>
         <n-layout has-sider style="height: 100%">
