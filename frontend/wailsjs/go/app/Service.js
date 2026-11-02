@@ -26,6 +26,22 @@ export function DeleteSnippet(arg1) {
   return window['go']['app']['Service']['DeleteSnippet'](arg1);
 }
 
+export function FinishRemoteEdit(arg1) {
+  return window['go']['app']['Service']['FinishRemoteEdit'](arg1);
+}
+
+export function GetTransferSpeedLimit() {
+  return window['go']['app']['Service']['GetTransferSpeedLimit']();
+}
+
+export function ImportHosts(arg1) {
+  return window['go']['app']['Service']['ImportHosts'](arg1);
+}
+
+export function IsCwdSyncEnabled() {
+  return window['go']['app']['Service']['IsCwdSyncEnabled']();
+}
+
 export function IsSessionLogEnabled() {
   return window['go']['app']['Service']['IsSessionLogEnabled']();
 }
@@ -38,12 +54,32 @@ export function ListHosts() {
   return window['go']['app']['Service']['ListHosts']();
 }
 
+export function ListRemoteEdits() {
+  return window['go']['app']['Service']['ListRemoteEdits']();
+}
+
 export function ListSnippets() {
   return window['go']['app']['Service']['ListSnippets']();
 }
 
 export function ListTransfers() {
   return window['go']['app']['Service']['ListTransfers']();
+}
+
+export function LocalHome() {
+  return window['go']['app']['Service']['LocalHome']();
+}
+
+export function LocalListDir(arg1) {
+  return window['go']['app']['Service']['LocalListDir'](arg1);
+}
+
+export function LocalParent(arg1) {
+  return window['go']['app']['Service']['LocalParent'](arg1);
+}
+
+export function PauseTransfer(arg1) {
+  return window['go']['app']['Service']['PauseTransfer'](arg1);
 }
 
 export function PickDir() {
@@ -70,6 +106,14 @@ export function ResizeSession(arg1, arg2, arg3) {
   return window['go']['app']['Service']['ResizeSession'](arg1, arg2, arg3);
 }
 
+export function ResolveEditConflict(arg1, arg2) {
+  return window['go']['app']['Service']['ResolveEditConflict'](arg1, arg2);
+}
+
+export function ResumeTransfer(arg1) {
+  return window['go']['app']['Service']['ResumeTransfer'](arg1);
+}
+
 export function SaveGroup(arg1) {
   return window['go']['app']['Service']['SaveGroup'](arg1);
 }
@@ -82,6 +126,14 @@ export function SaveSnippet(arg1) {
   return window['go']['app']['Service']['SaveSnippet'](arg1);
 }
 
+export function ScanImportDir(arg1, arg2) {
+  return window['go']['app']['Service']['ScanImportDir'](arg1, arg2);
+}
+
+export function SetCwdSyncEnabled(arg1) {
+  return window['go']['app']['Service']['SetCwdSyncEnabled'](arg1);
+}
+
 export function SetHostSecret(arg1, arg2, arg3) {
   return window['go']['app']['Service']['SetHostSecret'](arg1, arg2, arg3);
 }
@@ -92,6 +144,10 @@ export function SetSessionLogEnabled(arg1) {
 
 export function SetTransferPolicy(arg1, arg2, arg3) {
   return window['go']['app']['Service']['SetTransferPolicy'](arg1, arg2, arg3);
+}
+
+export function SetTransferSpeedLimit(arg1) {
+  return window['go']['app']['Service']['SetTransferSpeedLimit'](arg1);
 }
 
 export function SftpDownload(arg1, arg2, arg3) {
@@ -122,6 +178,10 @@ export function SftpUpload(arg1, arg2, arg3) {
   return window['go']['app']['Service']['SftpUpload'](arg1, arg2, arg3);
 }
 
+export function StartRemoteEdit(arg1, arg2) {
+  return window['go']['app']['Service']['StartRemoteEdit'](arg1, arg2);
+}
+
 export function TransferCancel(arg1) {
   return window['go']['app']['Service']['TransferCancel'](arg1);
 }
@@ -132,12 +192,4 @@ export function TransferRetry(arg1) {
 
 export function WriteSession(arg1, arg2) {
   return window['go']['app']['Service']['WriteSession'](arg1, arg2);
-}
-
-export function XshellImport(arg1) {
-  return window['go']['app']['Service']['XshellImport'](arg1);
-}
-
-export function XshellScanDir(arg1) {
-  return window['go']['app']['Service']['XshellScanDir'](arg1);
 }

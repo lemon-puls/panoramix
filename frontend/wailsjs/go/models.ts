@@ -31,6 +31,8 @@ export namespace app {
 	    keyPath: string;
 	    hasSecret: boolean;
 	    initCommands: string[];
+	    loginScript: store.LoginStep[];
+	    proxyChain: string[];
 	    keepaliveSec: number;
 	    autoReconnect: boolean;
 	    // Go type: time
@@ -59,6 +61,8 @@ export namespace app {
 	        this.keyPath = source["keyPath"];
 	        this.hasSecret = source["hasSecret"];
 	        this.initCommands = source["initCommands"];
+	        this.loginScript = this.convertValues(source["loginScript"], store.LoginStep);
+	        this.proxyChain = source["proxyChain"];
 	        this.keepaliveSec = source["keepaliveSec"];
 	        this.autoReconnect = source["autoReconnect"];
 	        this.lastConnectedAt = this.convertValues(source["lastConnectedAt"], null);
@@ -87,11 +91,111 @@ export namespace app {
 		    return a;
 		}
 	}
+	export class ImportPreview {
+	    source: string;
+	    file: string;
+	    name: string;
+	    host: string;
+	    port: number;
+	    username: string;
+	    authType: string;
+	    keyName?: string;
+	    hasProxy?: boolean;
+	    valid: boolean;
+	    skipReason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.file = source["file"];
+	        this.name = source["name"];
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.username = source["username"];
+	        this.authType = source["authType"];
+	        this.keyName = source["keyName"];
+	        this.hasProxy = source["hasProxy"];
+	        this.valid = source["valid"];
+	        this.skipReason = source["skipReason"];
+	    }
+	}
+
+}
+
+export namespace fsx {
+	
+	export class Entry {
+	    name: string;
+	    path: string;
+	    isDir: boolean;
+	    size: number;
+	    // Go type: time
+	    mtime: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new Entry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.isDir = source["isDir"];
+	        this.size = source["size"];
+	        this.mtime = this.convertValues(source["mtime"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 
 }
 
 export namespace sftp {
 	
+	export class EditInfo {
+	    id: string;
+	    sessionId: string;
+	    remotePath: string;
+	    localPath: string;
+	    name: string;
+	    conflict: boolean;
+	    uploadedAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.sessionId = source["sessionId"];
+	        this.remotePath = source["remotePath"];
+	        this.localPath = source["localPath"];
+	        this.name = source["name"];
+	        this.conflict = source["conflict"];
+	        this.uploadedAt = source["uploadedAt"];
+	    }
+	}
 	export class RemoteEntry {
 	    name: string;
 	    path: string;
@@ -216,6 +320,20 @@ export namespace store {
 		    return a;
 		}
 	}
+	export class LoginStep {
+	    expect: string;
+	    send: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LoginStep(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.expect = source["expect"];
+	        this.send = source["send"];
+	    }
+	}
 	export class Host {
 	    id: string;
 	    groupId: string;
@@ -227,6 +345,8 @@ export namespace store {
 	    keyPath: string;
 	    hasSecret: boolean;
 	    initCommands: string[];
+	    loginScript: LoginStep[];
+	    proxyChain: string[];
 	    keepaliveSec: number;
 	    autoReconnect: boolean;
 	    // Go type: time
@@ -253,6 +373,8 @@ export namespace store {
 	        this.keyPath = source["keyPath"];
 	        this.hasSecret = source["hasSecret"];
 	        this.initCommands = source["initCommands"];
+	        this.loginScript = this.convertValues(source["loginScript"], LoginStep);
+	        this.proxyChain = source["proxyChain"];
 	        this.keepaliveSec = source["keepaliveSec"];
 	        this.autoReconnect = source["autoReconnect"];
 	        this.lastConnectedAt = this.convertValues(source["lastConnectedAt"], null);
@@ -279,6 +401,7 @@ export namespace store {
 		    return a;
 		}
 	}
+	
 	export class Snippet {
 	    id: string;
 	    name: string;
@@ -320,39 +443,6 @@ export namespace store {
 		    }
 		    return a;
 		}
-	}
-
-}
-
-export namespace xshell {
-	
-	export class Preview {
-	    file: string;
-	    name: string;
-	    host: string;
-	    port: number;
-	    username: string;
-	    authType: string;
-	    keyName?: string;
-	    valid: boolean;
-	    skipReason?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new Preview(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.file = source["file"];
-	        this.name = source["name"];
-	        this.host = source["host"];
-	        this.port = source["port"];
-	        this.username = source["username"];
-	        this.authType = source["authType"];
-	        this.keyName = source["keyName"];
-	        this.valid = source["valid"];
-	        this.skipReason = source["skipReason"];
-	    }
 	}
 
 }
