@@ -27,6 +27,10 @@ onMounted(() => {
   edits.ensureBus()
   void edits.refresh()
   void files.loadLocal('')
+  // 面板初始即打开时 watch 不触发，这里主动加载一次远程目录
+  if (sessionId.value && connected.value) {
+    files.load(sessionId.value, '').catch((e) => message.error(String(e)))
+  }
   void transfers.ensureSeeded()
   // 拖拽文件到面板 → 上传到当前目录（Wails 全局文件拖放）
   OnFileDrop((_x, _y, paths) => {
@@ -348,6 +352,7 @@ function fmtMtime(v: unknown): string {
           {{ t('files.uploadDir') }}
         </n-button>
       </div>
+      <div class="pane-body">
       <n-spin :show="files.localLoading" size="small">
         <div class="list">
           <div
@@ -364,6 +369,7 @@ function fmtMtime(v: unknown): string {
           </div>
         </div>
       </n-spin>
+      </div>
     </div>
 
     <!-- 远程栏 -->
@@ -397,6 +403,7 @@ function fmtMtime(v: unknown): string {
       </div>
     </div>
 
+    <div class="pane-body">
     <n-spin :show="files.loading" size="small">
       <n-empty
         v-if="files.entries.length === 0"
@@ -473,6 +480,7 @@ function fmtMtime(v: unknown): string {
         <n-empty v-if="sessionTasks.length === 0" size="small" :description="t('transfers.empty')" />
       </div>
     </div>
+    </div>
 
     <n-dropdown
       placement="bottom-start"
@@ -540,6 +548,21 @@ function fmtMtime(v: unknown): string {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  overflow: hidden;
+}
+/* NSpin 的容器链路必须同为 flex，否则内容不参与高度分配 */
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pane-body :deep(.n-spin-container),
+.pane-body :deep(.n-spin-content) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .pane + .pane {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -566,8 +589,10 @@ function fmtMtime(v: unknown): string {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex-shrink: 0;
 }
 .crumbs {
+  flex-shrink: 0;
   font-size: 12px;
   overflow: hidden;
   white-space: nowrap;
@@ -586,9 +611,11 @@ function fmtMtime(v: unknown): string {
 .toolbar {
   display: flex;
   gap: 6px;
+  flex-shrink: 0;
 }
 .list {
-  max-height: calc(100vh - 430px);
+  flex: 1;
+  min-height: 0;
   overflow: auto;
 }
 .row {
@@ -609,6 +636,7 @@ function fmtMtime(v: unknown): string {
 }
 .name {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -623,14 +651,20 @@ function fmtMtime(v: unknown): string {
   opacity: 0.55;
 }
 .mtime {
-  width: 92px;
-  font-size: 11px;
+  width: 104px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 10px;
   opacity: 0.55;
 }
 .empty {
   margin-top: 40px;
 }
 .transfers {
+  flex-shrink: 0;
+  max-height: 170px;
+  overflow: auto;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   padding-top: 6px;
 }
@@ -640,8 +674,6 @@ function fmtMtime(v: unknown): string {
   margin-bottom: 4px;
 }
 .transfers-list {
-  max-height: 150px;
-  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;

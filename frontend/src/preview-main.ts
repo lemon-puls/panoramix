@@ -2,7 +2,7 @@
 // mock Wails runtime → 注入假样本 → 渲染 MonitorPanel
 import { createApp, h } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
-import { NConfigProvider, NMessageProvider, darkTheme } from 'naive-ui'
+import { NConfigProvider, NDialogProvider, NMessageProvider, darkTheme } from 'naive-ui'
 import { zhCN, dateZhCN } from 'naive-ui'
 
 type Handler = (...args: any[]) => void
@@ -30,13 +30,58 @@ const handlers = new Map<string, Handler[]>()
   ClipboardSetText() { return true },
 }
 
+// mock go 绑定：仅 preview 用（FilePanel 依赖本地/远程列目录与传输列表）
+const mockService: Record<string, (...args: any[]) => Promise<any>> = {
+  LocalHome: async () => '/home/demo',
+  LocalParent: async (p: string) => p.split('/').slice(0, -1).join('/') || '/',
+  LocalListDir: async () =>
+    Array.from({ length: 14 }, (_, i) => ({
+      name: i % 4 === 0 ? `folder-${i}` : `local-file-${i}.tar.gz`,
+      path: `/home/demo/${i}`,
+      isDir: i % 4 === 0,
+      size: (i + 1) * 1024 * 512,
+      mtime: new Date().toISOString(),
+    })),
+  SftpHome: async () => '/root',
+  SftpListDir: async () =>
+    Array.from({ length: 18 }, (_, i) => ({
+      name: i % 5 === 0 ? `remote-dir-${i}` : `app.log.${i}`,
+      path: `/root/${i}`,
+      isDir: i % 5 === 0,
+      size: (i + 1) * 1024 * 300,
+      mode: '-rw-r--r--',
+      mtime: new Date().toISOString(),
+    })),
+  ListTransfers: async () => [],
+  ListRemoteEdits: async () => [],
+  SftpMkdir: async () => undefined,
+  SftpRemove: async () => undefined,
+  SftpRename: async () => undefined,
+  SftpDownload: async () => 'batch',
+  SftpUpload: async () => 'batch',
+  PickUploadFiles: async () => [],
+  PickUploadFile: async () => '',
+  PickDir: async () => '',
+  PickSavePath: async () => '',
+  TransferCancel: async () => undefined,
+  TransferRetry: async () => undefined,
+  SetTransferPolicy: async () => undefined,
+  PauseTransfer: async () => undefined,
+  ResumeTransfer: async () => undefined,
+}
+;(window as any).go = { app: { Service: mockService } }
+
 function emit(name: string, payload: unknown) {
   for (const cb of handlers.get(name) ?? []) cb(payload)
 }
 
 async function main() {
   const { useTerminalsStore } = await import('./stores/terminals')
-  const { default: MonitorPanel } = await import('./components/MonitorPanel.vue')
+  const { useFilesStore } = await import('./stores/files')
+  const panel = new URLSearchParams(location.search).get('panel')
+  const { default: Component } = panel === 'files'
+    ? await import('./components/FilePanel.vue')
+    : await import('./components/MonitorPanel.vue')
   const { i18n, setLocale } = await import('./i18n')
   const lang = new URLSearchParams(location.search).get('locale')
   if (lang === 'en-US') setLocale('en-US')
@@ -58,9 +103,12 @@ async function main() {
         default: () =>
           h(NMessageProvider, null, {
             default: () =>
-              h('div', { style: 'width:380px;height:900px;background:#18181c' }, [
-                h(MonitorPanel),
-              ]),
+              h(NDialogProvider, null, {
+                default: () =>
+                  h('div', { style: 'width:640px;height:900px;background:#18181c' }, [
+                    h(Component),
+                  ]),
+              }),
           }),
       }),
   })
