@@ -98,6 +98,18 @@ func (s *sqliteStore) migrate() error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS db_conns (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL,
+			kind       TEXT NOT NULL,
+			addr       TEXT NOT NULL,
+			port       INTEGER NOT NULL,
+			username   TEXT NOT NULL DEFAULT '',
+			db_name    TEXT NOT NULL DEFAULT '',
+			sort       INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key        TEXT PRIMARY KEY,
 			value      TEXT NOT NULL,
@@ -397,6 +409,81 @@ func (s *sqliteStore) SaveSnippet(sn *Snippet) error {
 
 func (s *sqliteStore) DeleteSnippet(id string) error {
 	res, err := s.db.Exec(`DELETE FROM snippets WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// ---------- 数据库连接 ----------
+
+const dbConnColumns = `id, name, kind, addr, port, username, db_name, sort, created_at, updated_at`
+
+func (s *sqliteStore) ListDBConns() ([]DBConn, error) {
+	rows, err := s.db.Query(`SELECT ` + dbConnColumns + ` FROM db_conns ORDER BY sort, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DBConn
+	for rows.Next() {
+		var c DBConn
+		var kind string
+		var created, updated int64
+		if err := rows.Scan(&c.ID, &c.Name, &kind, &c.Addr, &c.Port, &c.Username,
+			&c.DBName, &c.Sort, &created, &updated); err != nil {
+			return nil, err
+		}
+		c.Kind = DBKind(kind)
+		c.CreatedAt = time.Unix(created, 0)
+		c.UpdatedAt = time.Unix(updated, 0)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *sqliteStore) SaveDBConn(c *DBConn) error {
+	if c.Port <= 0 {
+		if c.Kind == DBRedis {
+			c.Port = 6379
+		} else {
+			c.Port = 3306
+		}
+	}
+	now := time.Now().Unix()
+	if c.ID == "" {
+		c.ID = NewID()
+		c.CreatedAt = time.Unix(now, 0)
+		c.UpdatedAt = c.CreatedAt
+		_, err := s.db.Exec(`INSERT INTO db_conns (`+dbConnColumns+`)
+			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			c.ID, c.Name, string(c.Kind), c.Addr, c.Port, c.Username, c.DBName,
+			c.Sort, now, now)
+		return err
+	}
+	c.UpdatedAt = time.Unix(now, 0)
+	res, err := s.db.Exec(`UPDATE db_conns SET name=?, kind=?, addr=?, port=?, username=?,
+		db_name=?, sort=?, updated_at=? WHERE id=?`,
+		c.Name, string(c.Kind), c.Addr, c.Port, c.Username, c.DBName, c.Sort, now, c.ID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		c.CreatedAt = time.Unix(now, 0)
+		_, err = s.db.Exec(`INSERT INTO db_conns (`+dbConnColumns+`)
+			VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			c.ID, c.Name, string(c.Kind), c.Addr, c.Port, c.Username, c.DBName,
+			c.Sort, now, now)
+		return err
+	}
+	return nil
+}
+
+func (s *sqliteStore) DeleteDBConn(id string) error {
+	res, err := s.db.Exec(`DELETE FROM db_conns WHERE id=?`, id)
 	if err != nil {
 		return err
 	}

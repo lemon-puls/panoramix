@@ -24,6 +24,10 @@ type Store interface {
 	// TouchHost 刷新主机最近连接时间（M2 由 SSH 层调用）
 	TouchHost(id string, at time.Time) error
 
+	ListDBConns() ([]DBConn, error)
+	SaveDBConn(c *DBConn) error
+	DeleteDBConn(id string) error
+
 	ListSnippets() ([]Snippet, error)
 	SaveSnippet(s *Snippet) error
 	DeleteSnippet(id string) error

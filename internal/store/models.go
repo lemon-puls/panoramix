@@ -62,6 +62,33 @@ type LoginStep struct {
 	Send   string `json:"send"`
 }
 
+// DBKind 数据库类型
+type DBKind string
+
+const (
+	DBMySQL DBKind = "mysql"
+	DBRedis DBKind = "redis"
+)
+
+// DBConn 数据库连接（MySQL / Redis）。
+// 密码不落库，存 OS keychain（引用键 db:<id>:password）。
+type DBConn struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Kind      DBKind    `json:"kind"`
+	Addr      string    `json:"addr"`
+	Port      int       `json:"port"`
+	Username  string    `json:"username"`
+	DBName    string    `json:"dbName"`  // MySQL: 库名；Redis: 库序号（默认 0）
+	HasSecret bool      `json:"hasSecret"` // keychain 中是否已存密码（只读）
+	Sort      int       `json:"sort"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// DBPasswordRef 返回数据库凭据在 keychain 中的引用键
+func DBPasswordRef(id string) string { return "db:" + id + ":password" }
+
 // Snippet 命令片段（点击发送到当前终端；Content 支持 {host} 占位符）
 type Snippet struct {
 	ID        string    `json:"id"`

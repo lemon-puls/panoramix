@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lemon-puls/panoramix/internal/db"
 	"github.com/lemon-puls/panoramix/internal/finalshell"
 	"github.com/lemon-puls/panoramix/internal/fsx"
 	"github.com/lemon-puls/panoramix/internal/monitor"
@@ -45,6 +46,7 @@ type Service struct {
 	transfers *sftp.Queue
 	editor    *sftp.Editor
 	dialog    Dialoger
+	dbmgr     *db.Manager
 
 	samplersMu sync.Mutex
 	samplers   map[string]*monitor.Sampler // sessionId → 监控采样器
@@ -52,7 +54,7 @@ type Service struct {
 
 // NewService 组装服务层
 func NewService(st store.Store, sec store.SecretStore, em Emitter, mgr *ssh.Manager,
-	transfers *sftp.Queue, editor *sftp.Editor, dlg Dialoger) *Service {
+	transfers *sftp.Queue, editor *sftp.Editor, dlg Dialoger, dbmgr *db.Manager) *Service {
 	return &Service{
 		store:     st,
 		secrets:   sec,
@@ -61,6 +63,7 @@ func NewService(st store.Store, sec store.SecretStore, em Emitter, mgr *ssh.Mana
 		transfers: transfers,
 		editor:    editor,
 		dialog:    dlg,
+		dbmgr:     dbmgr,
 		samplers:  map[string]*monitor.Sampler{},
 	}
 }
@@ -783,6 +786,182 @@ func (s *Service) PickDir() (string, error) {
 		return "", fmt.Errorf("dialog not ready")
 	}
 	return s.dialog.PickDirectory()
+}
+
+// ---------- 数据库连接（MySQL / Redis） ----------
+
+// DBConnInput 新建/编辑数据库连接的入参。
+// Password 仅用于写入 keychain，写入后立即清空（与 HostInput 同语义）。
+type DBConnInput struct {
+	store.DBConn
+	Password string `json:"password"`
+}
+
+func (in DBConnInput) String() string {
+	return fmt.Sprintf("{db:%s kind:%s addr:%s:%d user:%s db:%s password:***}",
+		in.Name, in.Kind, in.Addr, in.Port, in.Username, in.DBName)
+}
+
+func (in DBConnInput) GoString() string { return in.String() }
+
+// ListDBConns 返回全部数据库连接
+func (s *Service) ListDBConns() ([]store.DBConn, error) {
+	conns, err := s.store.ListDBConns()
+	if err != nil {
+		return nil, fmt.Errorf("list db conns: %w", err)
+	}
+	for i := range conns {
+		if _, serr := s.secrets.GetSecret(store.DBPasswordRef(conns[i].ID)); serr == nil {
+			conns[i].HasSecret = true
+		}
+	}
+	return conns, nil
+}
+
+// SaveDBConn 新建（ID 为空）或更新数据库连接；密码留空表示不修改
+func (s *Service) SaveDBConn(in DBConnInput) (store.DBConn, error) {
+	in.Name = strings.TrimSpace(in.Name)
+	in.Addr = strings.TrimSpace(in.Addr)
+	if in.Name == "" || in.Addr == "" {
+		return in.DBConn, fmt.Errorf("name and address are required")
+	}
+	if in.Kind != store.DBMySQL && in.Kind != store.DBRedis {
+		return in.DBConn, fmt.Errorf("unsupported kind: %s", in.Kind)
+	}
+	if in.ID == "" {
+		in.ID = store.NewID()
+	}
+	if in.Password != "" {
+		if err := s.secrets.SaveSecret(store.DBPasswordRef(in.ID), in.Password); err != nil {
+			return in.DBConn, fmt.Errorf("save password: %w", err)
+		}
+	}
+	in.Password = ""
+	c := in.DBConn
+	if err := s.store.SaveDBConn(&c); err != nil {
+		return c, fmt.Errorf("save db conn: %w", err)
+	}
+	if _, serr := s.secrets.GetSecret(store.DBPasswordRef(c.ID)); serr == nil {
+		c.HasSecret = true
+	}
+	log.Printf("[app] db conn saved: id=%s name=%q kind=%s", c.ID, c.Name, c.Kind)
+	return c, nil
+}
+
+// DeleteDBConn 删除数据库连接及其凭据
+func (s *Service) DeleteDBConn(id string) error {
+	if err := s.store.DeleteDBConn(id); err != nil {
+		return fmt.Errorf("delete db conn: %w", err)
+	}
+	_ = s.secrets.DeleteSecret(store.DBPasswordRef(id))
+	if s.dbmgr != nil {
+		s.dbmgr.CloseConn(id)
+	}
+	return nil
+}
+
+// dbConnAndPassword 取连接配置与密码（密码仅内存）
+func (s *Service) dbConnAndPassword(id string) (store.DBConn, string, error) {
+	conns, err := s.store.ListDBConns()
+	if err != nil {
+		return store.DBConn{}, "", err
+	}
+	for _, c := range conns {
+		if c.ID == id {
+			pw, _ := s.secrets.GetSecret(store.DBPasswordRef(c.ID))
+			return c, pw, nil
+		}
+	}
+	return store.DBConn{}, "", fmt.Errorf("db connection not found")
+}
+
+// TestDBConn 测试数据库连接
+func (s *Service) TestDBConn(id string) error {
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return err
+	}
+	if c.Kind == store.DBRedis {
+		return db.TestRedis(c, pw)
+	}
+	return db.Test(c, pw)
+}
+
+// DBQuery 执行 SQL（MySQL）。查询返回结果集（最多 limit 行），DML 返回影响行数
+func (s *Service) DBQuery(id, sqlText string, limit int) (*db.Result, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	res, qerr := s.dbmgr.Query(c, pw, sqlText, limit)
+	if qerr != nil {
+		log.Printf("[app] db query failed: %v", qerr)
+		return nil, qerr
+	}
+	return res, nil
+}
+
+// RedisScanKeys 渐进扫描键（cursor=0 从头开始；返回 Cursor=0 表示结束）
+func (s *Service) RedisScanKeys(id string, cursor uint64, pattern string, count int) (*db.KeyPage, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.dbmgr.RedisScan(c, pw, cursor, pattern, count)
+}
+
+// RedisGetValue 读取键值详情
+func (s *Service) RedisGetValue(id, key string) (*db.Value, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.dbmgr.RedisValue(c, pw, key)
+}
+
+// RedisSetTTL 设置键过期（秒；0 表示移除过期）
+func (s *Service) RedisSetTTL(id, key string, seconds int64) error {
+	if s.dbmgr == nil {
+		return fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return err
+	}
+	return s.dbmgr.RedisSetTTL(c, pw, key, seconds)
+}
+
+// RedisDeleteKey 删除键
+func (s *Service) RedisDeleteKey(id, key string) error {
+	if s.dbmgr == nil {
+		return fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return err
+	}
+	return s.dbmgr.RedisDelete(c, pw, key)
+}
+
+// RedisSetString 修改 string 类型值（keepTTL 保留原过期时间）
+func (s *Service) RedisSetString(id, key, value string, keepTTL bool) error {
+	if s.dbmgr == nil {
+		return fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return err
+	}
+	return s.dbmgr.RedisSetString(c, pw, key, value, keepTTL)
 }
 
 // ---------- 本地文件浏览（双面板） ----------

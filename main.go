@@ -14,6 +14,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/lemon-puls/panoramix/internal/app"
+	"github.com/lemon-puls/panoramix/internal/db"
 	"github.com/lemon-puls/panoramix/internal/sftp"
 	"github.com/lemon-puls/panoramix/internal/ssh"
 	"github.com/lemon-puls/panoramix/internal/store"
@@ -114,7 +115,11 @@ func main() {
 	// 远程编辑器：下载 → 系统编辑器 → 保存自动回传（冲突检测）
 	editor := sftp.NewEditor(mgr, em, dlg, filepath.Join(store.ConfigDir(), "edit"))
 
-	svc := app.NewService(st, secrets, em, mgr, queue, editor, dlg)
+	// 数据库连接池（MySQL / Redis）
+	dbmgr := db.NewManager()
+	defer dbmgr.CloseAll()
+
+	svc := app.NewService(st, secrets, em, mgr, queue, editor, dlg, dbmgr)
 
 	// 恢复上次保存的全局限速
 	if kbps, err := svc.GetTransferSpeedLimit(); err == nil && kbps > 0 {
