@@ -29,7 +29,7 @@
 | SFTP | `github.com/pkg/sftp` |
 | 存储 | `modernc.org/sqlite`（纯 Go、无 CGO） |
 | 凭据 | `zalando/go-keyring`；keychain 不可用时回退主密码 AES-GCM |
-| 图表（v0.2 起） | uPlot（禁用 ECharts 于监控面板） |
+| 图表（v0.2 起） | ECharts 5（2026-11-02 经用户确认由 uPlot 更换：美观/动画/悬浮交互优先；桌面端资源本地加载，包体不敏感） |
 | SQL 编辑器（v0.3 起） | CodeMirror 6（禁用 Monaco） |
 
 ## 代码组织

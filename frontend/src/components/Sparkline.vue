@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import uPlot from 'uplot'
-import 'uplot/dist/uPlot.min.css'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+import type { EChartsCoreOption } from 'echarts/core'
 
-// uPlot 迷你图包装：命令式 setData（数据来自监控总线，非响应式）
+// ECharts 迷你实时图：平滑曲线 + 渐变面积 + 悬浮十字提示 + 流式过渡动画
+echarts.use([LineChart, GridComponent, TooltipComponent, CanvasRenderer])
+
 const props = defineProps<{
   labels: number[] // x 轴（毫秒时间戳）
   series: { label: string; values: (number | null)[]; color: string; fill?: string }[]
@@ -13,66 +18,103 @@ const props = defineProps<{
 }>()
 
 const container = ref<HTMLDivElement>()
-let up: uPlot | null = null
+let chart: echarts.ECharts | null = null
 
-function buildData(): uPlot.AlignedData {
-  const n = props.labels.length
-  const cols: unknown[] = [props.labels]
-  for (const s of props.series) {
-    while (s.values.length < n) s.values.unshift(null)
-    cols.push(s.values)
+function axisLabel(t: number): string {
+  const d = new Date(t)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+function mkSeries(s: (typeof props.series)[number]) {
+  return {
+    name: s.label,
+    type: 'line' as const,
+    showSymbol: false,
+    smooth: 0.3,
+    data: props.labels.map((t, i) => [t, s.values[i] ?? null]),
+    lineStyle: { width: 1.6, color: s.color },
+    itemStyle: { color: s.color },
+    emphasis: { focus: 'series' as const },
+    areaStyle: s.fill
+      ? {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: `${s.color}55` },
+            { offset: 1, color: `${s.color}05` },
+          ]),
+        }
+      : undefined,
   }
-  return cols as uPlot.AlignedData
+}
+
+function buildOption(): EChartsCoreOption {
+  const dark = 'rgba(255,255,255,.45)'
+  const gridLine = 'rgba(255,255,255,.06)'
+
+  return {
+    animationDuration: 300,
+    animationDurationUpdate: 300,
+    animationEasingUpdate: 'linear',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(30,30,38,.96)',
+      borderColor: 'rgba(255,255,255,.15)',
+      textStyle: { color: 'rgba(255,255,255,.9)', fontSize: 11 },
+      axisPointer: {
+        type: 'cross',
+        lineStyle: { color: 'rgba(255,255,255,.3)' },
+        crossStyle: { color: 'rgba(255,255,255,.3)' },
+        label: { backgroundColor: '#2a2a34' },
+      },
+      valueFormatter: (v: unknown) =>
+        v == null ? '--' : `${Number(v).toFixed(1)}${props.unit ?? ''}`,
+    },
+    grid: { left: 6, right: 40, top: 8, bottom: 4, containLabel: false },
+    xAxis: {
+      type: 'time',
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: dark, fontSize: 10, hideOverlap: true, formatter: axisLabel },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      min: 0,
+      max: props.yMax ?? undefined,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: dark,
+        fontSize: 10,
+        formatter: (v: number) => `${v}${props.unit ?? ''}`,
+      },
+      splitLine: { lineStyle: { color: gridLine } },
+    },
+    series: props.series.map(mkSeries),
+  }
 }
 
 onMounted(() => {
   if (!container.value) return
-  const h = props.height ?? 110
-  const opts: uPlot.Options = {
-    width: container.value.clientWidth,
-    height: h,
-    cursor: { show: false },
-    legend: { show: true, live: false },
-    scales: {
-      y: props.yMax != null ? { range: [0, props.yMax] } : { auto: true },
-    },
-    axes: [
-      { stroke: 'rgba(255,255,255,.35)', grid: { stroke: 'rgba(255,255,255,.07)' }, ticks: { show: false } },
-      { stroke: 'rgba(255,255,255,.35)', grid: { stroke: 'rgba(255,255,255,.07)' }, side: 1, size: 42 },
-    ],
-    series: [
-      {},
-      ...props.series.map((s) => ({
-        label: s.label,
-        stroke: s.color,
-        width: 1.5,
-        fill: s.fill ? `${s.color}33` : undefined,
-        points: { show: false },
-        value: (_u: unknown, v: number | null) =>
-          v == null ? '--' : `${v.toFixed(1)}${props.unit ?? ''}`,
-      })),
-    ],
-  }
-  up = new uPlot(opts, buildData(), container.value)
+  chart = echarts.init(container.value, undefined, {
+    height: props.height ?? 110,
+    renderer: 'canvas',
+  })
+  chart.setOption(buildOption())
 })
 
-// 数据更新 → 重设（父组件每次整体换新数组，监听引用而非 length——
-// 环形缓冲满后长度恒定，length 监听会停更）
+// 数据更新 → 增量 setOption（ECharts 自动做状态过渡动画）
 watch(
   () => [props.labels, props.series],
-  () => up?.setData(buildData()),
+  () => chart?.setOption({ series: props.series.map(mkSeries) }),
   { flush: 'post' },
 )
 
-const ro = new ResizeObserver(() => {
-  if (up && container.value) {
-    up.setSize({ width: container.value.clientWidth, height: props.height ?? 110 })
-  }
-})
+const ro = new ResizeObserver(() => chart?.resize())
 onMounted(() => container.value && ro.observe(container.value))
 onBeforeUnmount(() => {
   ro.disconnect()
-  up?.destroy()
+  chart?.dispose()
 })
 </script>
 
