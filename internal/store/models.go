@@ -28,6 +28,8 @@ const (
 	AuthKey AuthType = "key"
 	// AuthKeyboardInteractive 键盘交互认证（2FA 场景）
 	AuthKeyboardInteractive AuthType = "keyboard_interactive"
+	// AuthAgent 使用本机 SSH agent（Windows OpenSSH agent / Unix SSH_AUTH_SOCK）
+	AuthAgent AuthType = "agent"
 )
 
 // Host 一台 SSH 主机。
@@ -44,6 +46,7 @@ type Host struct {
 	KeyPath         string    `json:"keyPath"`      // 私钥文件路径（引用而非复制）
 	HasSecret       bool      `json:"hasSecret"`    // keychain 中是否已存凭据（只读）
 	InitCommands    []string  `json:"initCommands"` // 登录成功后按序执行的初始命令
+	ProxyChain      []string  `json:"proxyChain"`   // 跳板链：依次经过的主机 ID（空=直连）
 	KeepaliveSec    int       `json:"keepaliveSec"` // keepalive 间隔秒数，默认 30
 	AutoReconnect   bool      `json:"autoReconnect"`
 	LastConnectedAt time.Time `json:"lastConnectedAt"`

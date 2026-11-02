@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lemon-puls/panoramix/internal/finalshell"
 	"github.com/lemon-puls/panoramix/internal/monitor"
 	"github.com/lemon-puls/panoramix/internal/sftp"
 	"github.com/lemon-puls/panoramix/internal/ssh"
@@ -90,6 +91,58 @@ type ConnectHostResult struct {
 	Message     string `json:"message"`
 }
 
+// buildConnectConfig 组装单台主机的连接配置（含从 keychain 取凭据）。
+// 返回非 nil 的 ConnectHostResult 表示组装失败（错误码已归类）。
+func (s *Service) buildConnectConfig(h *store.Host, trustMode string, sessionLog bool) (*ssh.ConnectConfig, *ConnectHostResult) {
+	cfg := &ssh.ConnectConfig{
+		HostID:        h.ID,
+		Name:          h.Name,
+		Addr:          h.Addr,
+		Port:          h.Port,
+		Username:      h.Username,
+		AuthType:      string(h.AuthType),
+		KeyPath:       h.KeyPath,
+		InitCommands:  h.InitCommands,
+		KeepaliveSec:  h.KeepaliveSec,
+		AutoReconnect: h.AutoReconnect,
+		SessionLog:    sessionLog,
+		TrustMode:     trustMode,
+	}
+	// 凭据在连接瞬间从 keychain 解出；Start 返回后由调用方立即清空
+	switch cfg.AuthType {
+	case "password", "keyboard_interactive":
+		pw, err := s.secrets.GetSecret(store.HostPasswordRef(h.ID))
+		if err != nil {
+			if errors.Is(err, store.ErrSecretNotFound) {
+				return nil, &ConnectHostResult{ErrorCode: "auth_failed",
+					Message: "no password stored for this host"}
+			}
+			return nil, &ConnectHostResult{ErrorCode: "auth_failed",
+				Message: "read credential from keychain failed"}
+		}
+		cfg.Password = pw
+	case "key":
+		// passphrase 可选：不存在按无加密私钥处理
+		if pp, err := s.secrets.GetSecret(store.HostPassphraseRef(h.ID)); err == nil {
+			cfg.Passphrase = pp
+		}
+	case "agent":
+		// 无需凭据：使用本机 SSH agent
+	default:
+		return nil, &ConnectHostResult{ErrorCode: "connect_failed",
+			Message: "unsupported auth type: " + cfg.AuthType}
+	}
+	return cfg, nil
+}
+
+// clearSecrets 清空配置及跳板链中的凭据（Start 之后立即调用）
+func clearSecrets(cfg *ssh.ConnectConfig) {
+	cfg.Password, cfg.Passphrase = "", ""
+	for i := range cfg.Jumps {
+		cfg.Jumps[i].Password, cfg.Jumps[i].Passphrase = "", ""
+	}
+}
+
 // ConnectHost 连接主机并打开终端会话。
 // trustMode: ""（首次尝试）| "add"（用户确认未知指纹）| "replace"（用户确认指纹变更）。
 func (s *Service) ConnectHost(hostID string, trustMode string) ConnectHostResult {
@@ -108,45 +161,46 @@ func (s *Service) ConnectHost(hostID string, trustMode string) ConnectHostResult
 		return ConnectHostResult{ErrorCode: "connect_failed", Message: "host not found"}
 	}
 
-	cfg := ssh.ConnectConfig{
-		HostID:        h.ID,
-		Name:          h.Name,
-		Addr:          h.Addr,
-		Port:          h.Port,
-		Username:      h.Username,
-		AuthType:      string(h.AuthType),
-		KeyPath:       h.KeyPath,
-		InitCommands:  h.InitCommands,
-		KeepaliveSec:  h.KeepaliveSec,
-		AutoReconnect: h.AutoReconnect,
-		SessionLog:    s.sessionLogEnabled(),
-		TrustMode:     trustMode,
+	cfg, cErr := s.buildConnectConfig(h, trustMode, s.sessionLogEnabled())
+	if cErr != nil {
+		return *cErr
 	}
-	// 凭据在连接瞬间从 keychain 解出；Start 返回后立即置空，防止残留引用
-	switch cfg.AuthType {
-	case "password", "keyboard_interactive":
-		pw, err := s.secrets.GetSecret(store.HostPasswordRef(h.ID))
-		if err != nil {
-			if errors.Is(err, store.ErrSecretNotFound) {
-				return ConnectHostResult{ErrorCode: "auth_failed",
-					Message: "no password stored for this host"}
-			}
-			return ConnectHostResult{ErrorCode: "auth_failed",
-				Message: "read credential from keychain failed"}
+	// 跳板链：逐台解析（每个跳板用自身凭据；跳板自身的 ProxyChain 不再展开，
+	// 避免环与无限递归）
+	if len(h.ProxyChain) > 0 {
+		byID := make(map[string]*store.Host, len(hosts))
+		for i := range hosts {
+			byID[hosts[i].ID] = &hosts[i]
 		}
-		cfg.Password = pw
-	case "key":
-		// passphrase 可选：不存在按无加密私钥处理
-		if pp, err := s.secrets.GetSecret(store.HostPassphraseRef(h.ID)); err == nil {
-			cfg.Passphrase = pp
+		seen := map[string]bool{h.ID: true}
+		for i, jumpID := range h.ProxyChain {
+			if i >= 3 {
+				return ConnectHostResult{ErrorCode: "connect_failed",
+					Message: "proxy chain too long (max 3 hops)"}
+			}
+			jh, ok := byID[jumpID]
+			if !ok {
+				return ConnectHostResult{ErrorCode: "connect_failed",
+					Message: "proxy host not found: " + jumpID}
+			}
+			if seen[jh.ID] {
+				return ConnectHostResult{ErrorCode: "connect_failed",
+					Message: "proxy chain contains a cycle"}
+			}
+			seen[jh.ID] = true
+			jcfg, jErr := s.buildConnectConfig(jh, trustMode, false)
+			if jErr != nil {
+				return *jErr
+			}
+			cfg.Jumps = append(cfg.Jumps, *jcfg)
 		}
 	}
 
 	if s.ssh == nil {
 		return ConnectHostResult{ErrorCode: "connect_failed", Message: "ssh manager not ready"}
 	}
-	sessionID, startErr := s.ssh.Start(cfg)
-	cfg.Password, cfg.Passphrase = "", ""
+	sessionID, startErr := s.ssh.Start(*cfg)
+	clearSecrets(cfg)
 
 	if startErr != nil {
 		var hke *ssh.HostKeyError
@@ -157,7 +211,8 @@ func (s *Service) ConnectHost(hostID string, trustMode string) ConnectHostResult
 			}
 			// 只记主机与指纹，不记任何凭据
 			log.Printf("[app] host key verification required: %s %s", hke.HostPort, hke.Fingerprint)
-			return ConnectHostResult{ErrorCode: code, Fingerprint: hke.Fingerprint}
+			return ConnectHostResult{ErrorCode: code, Fingerprint: hke.Fingerprint,
+				Message: hke.HostPort}
 		}
 		log.Printf("[app] connect failed: %v", startErr)
 		return ConnectHostResult{ErrorCode: "connect_failed", Message: startErr.Error()}
@@ -634,16 +689,65 @@ func (s *Service) PickDir() (string, error) {
 	return s.dialog.PickDirectory()
 }
 
-// ---------- Xshell 导入 ----------
+// ---------- 第三方客户端导入（Xshell / FinalShell） ----------
 
-// XshellScanDir 扫描 Xshell 会话目录（*.xsh），返回可导入预览列表
-func (s *Service) XshellScanDir(dir string) ([]xshell.Preview, error) {
-	return xshell.ScanDir(dir)
+// ImportPreview 统一的导入预览项（两种来源归一，前端只处理一种结构）
+type ImportPreview struct {
+	Source     string `json:"source"` // xshell | finalshell
+	File       string `json:"file"`
+	Name       string `json:"name"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	Username   string `json:"username"`
+	AuthType   string `json:"authType"`
+	KeyName    string `json:"keyName,omitempty"`
+	HasProxy   bool   `json:"hasProxy,omitempty"` // FinalShell 配置了跳板，需导入后手动配置跳板链
+	Valid      bool   `json:"valid"`
+	SkipReason string `json:"skipReason,omitempty"`
 }
 
-// XshellImport 将选中的有效预览导入为主机（同名同地址去重跳过）。
-// Xshell 的密码/密钥不可迁移：导入的主机无凭据，首次连接时前端引导补录。
-func (s *Service) XshellImport(previews []xshell.Preview) (int, error) {
+// ScanImportDir 扫描第三方客户端配置目录，返回可导入预览列表。
+// source: "xshell"（会话目录 *.xsh）| "finalshell"（conn/*_connect_config.json）
+func (s *Service) ScanImportDir(source, dir string) ([]ImportPreview, error) {
+	switch source {
+	case "xshell":
+		list, err := xshell.ScanDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]ImportPreview, 0, len(list))
+		for _, p := range list {
+			out = append(out, ImportPreview{
+				Source: "xshell", File: p.File, Name: p.Name, Host: p.Host,
+				Port: p.Port, Username: p.Username, AuthType: p.AuthType,
+				KeyName: p.KeyName, Valid: p.Valid, SkipReason: p.SkipReason,
+			})
+		}
+		return out, nil
+	case "finalshell":
+		list, err := finalshell.ScanDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]ImportPreview, 0, len(list))
+		for _, p := range list {
+			out = append(out, ImportPreview{
+				Source: "finalshell", File: p.File, Name: p.Name, Host: p.Host,
+				Port: p.Port, Username: p.Username, AuthType: p.AuthType,
+				KeyName: p.KeyName, HasProxy: p.HasProxy,
+				Valid: p.Valid, SkipReason: p.SkipReason,
+			})
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unknown import source: %s", source)
+	}
+}
+
+// ImportHosts 将选中的有效预览导入为主机（同名同地址去重跳过）。
+// 两家客户端的密码/密钥均为本机私有加密格式，不可迁移：导入的主机无凭据，
+// 首次连接时前端引导补录。
+func (s *Service) ImportHosts(previews []ImportPreview) (int, error) {
 	existing, err := s.store.ListHosts()
 	if err != nil {
 		return 0, fmt.Errorf("list hosts: %w", err)
@@ -654,19 +758,23 @@ func (s *Service) XshellImport(previews []xshell.Preview) (int, error) {
 	}
 	imported := 0
 	for _, p := range previews {
-		if !p.Valid {
+		if !p.Valid || strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.Host) == "" {
 			continue
 		}
 		key := p.Name + "|" + p.Host
 		if seen[key] {
 			continue
 		}
+		auth := store.AuthType(p.AuthType)
+		if auth != store.AuthPassword && auth != store.AuthKey && auth != store.AuthKeyboardInteractive {
+			auth = store.AuthPassword
+		}
 		h := store.Host{
 			Name:          p.Name,
 			Addr:          p.Host,
 			Port:          p.Port,
 			Username:      p.Username,
-			AuthType:      store.AuthType(p.AuthType),
+			AuthType:      auth,
 			KeepaliveSec:  30,
 			AutoReconnect: true,
 		}
@@ -676,7 +784,6 @@ func (s *Service) XshellImport(previews []xshell.Preview) (int, error) {
 		seen[key] = true
 		imported++
 	}
-	// 已存在的同配置主机与无效条目均计入 skipped
-	log.Printf("[app] xshell import: %d imported of %d previews", imported, len(previews))
+	log.Printf("[app] import: %d imported of %d previews", imported, len(previews))
 	return imported, nil
 }

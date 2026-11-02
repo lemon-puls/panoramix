@@ -10,6 +10,7 @@ import (
 
 // buildAuth 根据认证类型构造 SSH 认证方法列表。
 // Password/Passphrase 是 keychain 解密结果，仅存在于内存，严禁写日志。
+// agent 类型由 Manager 缓存的 agent 客户端构造（见 Manager.authFor）。
 func buildAuth(cfg ConnectConfig) ([]gossh.AuthMethod, error) {
 	switch cfg.AuthType {
 	case "password", "keyboard_interactive":
@@ -30,6 +31,8 @@ func buildAuth(cfg ConnectConfig) ([]gossh.AuthMethod, error) {
 		return methods, nil
 	case "key":
 		return buildKeyAuth(cfg.KeyPath, cfg.Passphrase)
+	case "agent":
+		return nil, errors.New("agent auth requires an agent client (internal)")
 	default:
 		return nil, fmt.Errorf("unsupported auth type: %s", cfg.AuthType)
 	}

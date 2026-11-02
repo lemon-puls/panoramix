@@ -26,6 +26,10 @@ export function DeleteSnippet(arg1) {
   return window['go']['app']['Service']['DeleteSnippet'](arg1);
 }
 
+export function ImportHosts(arg1) {
+  return window['go']['app']['Service']['ImportHosts'](arg1);
+}
+
 export function IsSessionLogEnabled() {
   return window['go']['app']['Service']['IsSessionLogEnabled']();
 }
@@ -82,6 +86,10 @@ export function SaveSnippet(arg1) {
   return window['go']['app']['Service']['SaveSnippet'](arg1);
 }
 
+export function ScanImportDir(arg1, arg2) {
+  return window['go']['app']['Service']['ScanImportDir'](arg1, arg2);
+}
+
 export function SetHostSecret(arg1, arg2, arg3) {
   return window['go']['app']['Service']['SetHostSecret'](arg1, arg2, arg3);
 }
@@ -132,12 +140,4 @@ export function TransferRetry(arg1) {
 
 export function WriteSession(arg1, arg2) {
   return window['go']['app']['Service']['WriteSession'](arg1, arg2);
-}
-
-export function XshellImport(arg1) {
-  return window['go']['app']['Service']['XshellImport'](arg1);
-}
-
-export function XshellScanDir(arg1) {
-  return window['go']['app']['Service']['XshellScanDir'](arg1);
 }

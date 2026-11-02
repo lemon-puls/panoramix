@@ -81,6 +81,7 @@ func (s *sqliteStore) migrate() error {
 			auth_type         TEXT NOT NULL DEFAULT 'password',
 			key_path          TEXT NOT NULL DEFAULT '',
 			init_commands     TEXT NOT NULL DEFAULT '[]',
+			proxy_chain       TEXT NOT NULL DEFAULT '[]',
 			keepalive_sec     INTEGER NOT NULL DEFAULT 30,
 			auto_reconnect    INTEGER NOT NULL DEFAULT 1,
 			last_connected_at INTEGER NOT NULL DEFAULT 0,
@@ -109,7 +110,45 @@ func (s *sqliteStore) migrate() error {
 	if _, err := s.db.Exec(`INSERT OR IGNORE INTO meta(k, v) VALUES ('schema_version', '1')`); err != nil {
 		return fmt.Errorf("set schema version: %w", err)
 	}
+	// v2 迁移：老库补 proxy_chain 列（SQLite 无 ADD COLUMN IF NOT EXISTS，
+	// 用列存在性探测保证幂等）
+	var version string
+	_ = s.db.QueryRow(`SELECT v FROM meta WHERE k='schema_version'`).Scan(&version)
+	if version < "2" {
+		if !s.columnExists("hosts", "proxy_chain") {
+			if _, err := s.db.Exec(
+				`ALTER TABLE hosts ADD COLUMN proxy_chain TEXT NOT NULL DEFAULT '[]'`); err != nil {
+				return fmt.Errorf("migrate v2: %w", err)
+			}
+			log.Printf("[store] schema migrated to v2 (proxy_chain)")
+		}
+		if _, err := s.db.Exec(`UPDATE meta SET v='2' WHERE k='schema_version'`); err != nil {
+			return fmt.Errorf("set schema version 2: %w", err)
+		}
+	}
 	return nil
+}
+
+// columnExists 探测表是否已有某列（PRAGMA table_info）
+func (s *sqliteStore) columnExists(table, column string) bool {
+	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------- 分组 ----------
@@ -166,16 +205,16 @@ func (s *sqliteStore) DeleteGroup(id string) error {
 // ---------- 主机 ----------
 
 const hostColumns = `id, group_id, name, addr, port, username, auth_type, key_path,
-	init_commands, keepalive_sec, auto_reconnect, last_connected_at, sort,
+	init_commands, proxy_chain, keepalive_sec, auto_reconnect, last_connected_at, sort,
 	created_at, updated_at`
 
 func scanHost(scanner interface{ Scan(...any) error }) (Host, error) {
 	var h Host
-	var authType, initCmds string
+	var authType, initCmds, proxyChain string
 	var port, keepalive, autoRe, lastAt int64
 	var created, updated int64
 	if err := scanner.Scan(&h.ID, &h.GroupID, &h.Name, &h.Addr, &port, &h.Username,
-		&authType, &h.KeyPath, &initCmds, &keepalive, &autoRe, &lastAt, &h.Sort,
+		&authType, &h.KeyPath, &initCmds, &proxyChain, &keepalive, &autoRe, &lastAt, &h.Sort,
 		&created, &updated); err != nil {
 		return h, err
 	}
@@ -189,6 +228,9 @@ func scanHost(scanner interface{ Scan(...any) error }) (Host, error) {
 	if err := json.Unmarshal([]byte(initCmds), &h.InitCommands); err != nil {
 		// 脏数据兜底：解析失败按空列表处理，不阻塞启动
 		h.InitCommands = []string{}
+	}
+	if err := json.Unmarshal([]byte(proxyChain), &h.ProxyChain); err != nil {
+		h.ProxyChain = []string{}
 	}
 	return h, nil
 }
@@ -221,23 +263,30 @@ func (s *sqliteStore) SaveHost(h *Host) error {
 	if h.InitCommands == nil {
 		h.InitCommands = []string{}
 	}
+	if h.ProxyChain == nil {
+		h.ProxyChain = []string{}
+	}
 	cmds, err := json.Marshal(h.InitCommands)
 	if err != nil {
 		return fmt.Errorf("marshal init commands: %w", err)
+	}
+	chain, err := json.Marshal(h.ProxyChain)
+	if err != nil {
+		return fmt.Errorf("marshal proxy chain: %w", err)
 	}
 	now := time.Now().Unix()
 	if h.ID == "" {
 		h.ID = NewID()
 		h.CreatedAt = time.Unix(now, 0)
 		h.UpdatedAt = h.CreatedAt
-		return insertHost(s.db, h, string(cmds), now)
+		return insertHost(s.db, h, string(cmds), string(chain), now)
 	}
 	h.UpdatedAt = time.Unix(now, 0)
 	res, err := s.db.Exec(`UPDATE hosts SET group_id=?, name=?, addr=?, port=?, username=?,
-		auth_type=?, key_path=?, init_commands=?, keepalive_sec=?, auto_reconnect=?,
+		auth_type=?, key_path=?, init_commands=?, proxy_chain=?, keepalive_sec=?, auto_reconnect=?,
 		last_connected_at=?, sort=?, updated_at=? WHERE id=?`,
 		h.GroupID, h.Name, h.Addr, h.Port, h.Username, string(h.AuthType),
-		h.KeyPath, string(cmds), h.KeepaliveSec, boolInt(h.AutoReconnect),
+		h.KeyPath, string(cmds), string(chain), h.KeepaliveSec, boolInt(h.AutoReconnect),
 		h.LastConnectedAt.Unix(), h.Sort, now, h.ID)
 	if err != nil {
 		return err
@@ -245,16 +294,16 @@ func (s *sqliteStore) SaveHost(h *Host) error {
 	// 非空 ID 但记录不存在（service 层为新主机预生成 ID 的场景）：按新建处理
 	if n, _ := res.RowsAffected(); n == 0 {
 		h.CreatedAt = time.Unix(now, 0)
-		return insertHost(s.db, h, string(cmds), now)
+		return insertHost(s.db, h, string(cmds), string(chain), now)
 	}
 	return nil
 }
 
-func insertHost(db *sql.DB, h *Host, cmds string, now int64) error {
+func insertHost(db *sql.DB, h *Host, cmds, chain string, now int64) error {
 	_, err := db.Exec(`INSERT INTO hosts (`+hostColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		h.ID, h.GroupID, h.Name, h.Addr, h.Port, h.Username, string(h.AuthType),
-		h.KeyPath, cmds, h.KeepaliveSec, boolInt(h.AutoReconnect),
+		h.KeyPath, cmds, chain, h.KeepaliveSec, boolInt(h.AutoReconnect),
 		h.LastConnectedAt.Unix(), h.Sort, now, now)
 	return err
 }

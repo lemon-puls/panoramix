@@ -3,6 +3,7 @@ module github.com/lemon-puls/panoramix
 go 1.27.3
 
 require (
+	github.com/Microsoft/go-winio v0.6.4
 	github.com/creack/pty v1.1.24
 	github.com/pkg/sftp v1.13.12
 	github.com/wailsapp/wails/v2 v2.17.0

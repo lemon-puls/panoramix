@@ -173,6 +173,7 @@ async function onMenuSelect(key: string) {
             username: src.username,
             authType: src.authType,
             keyPath: src.keyPath,
+            proxyChain: [...(src.proxyChain ?? [])],
             initCommands: [...src.initCommands],
             keepaliveSec: src.keepaliveSec,
             autoReconnect: src.autoReconnect,

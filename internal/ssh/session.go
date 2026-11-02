@@ -43,7 +43,7 @@ type ConnectConfig struct {
 	Addr          string
 	Port          int
 	Username      string
-	AuthType      string // password | key | keyboard_interactive
+	AuthType      string // password | key | keyboard_interactive | agent
 	KeyPath       string
 	Password      string
 	Passphrase    string
@@ -52,6 +52,8 @@ type ConnectConfig struct {
 	AutoReconnect bool   // 断线自动重连（最多 5 次，间隔 3s）
 	SessionLog    bool   // 会话日志（按天落文件）
 	TrustMode     string // "" | "add" | "replace"，TOFU 二次连接时携带
+	// Jumps 跳板链：按顺序建立隧道（每项为跳板主机配置，凭据已由 app 层解出）
+	Jumps []ConnectConfig
 
 	// 由 Manager 注入的运行参数
 	knownHostsPath string
@@ -60,6 +62,20 @@ type ConnectConfig struct {
 
 func (c *ConnectConfig) hostPort() string {
 	return net.JoinHostPort(c.Addr, strconv.Itoa(c.Port))
+}
+
+// clientConfigFor 构造某跳连接的 SSH 客户端配置（含主机密钥校验与认证）
+func (s *Session) clientConfigFor(cfg *ConnectConfig) (*gossh.ClientConfig, error) {
+	auth, err := s.mgr.authFor(*cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &gossh.ClientConfig{
+		User:            cfg.Username,
+		Auth:            auth,
+		HostKeyCallback: s.hostKeyCallbackFor(cfg),
+		Timeout:         15 * time.Second,
+	}, nil
 }
 
 // Session 一个活跃的 SSH 终端会话（一个 PTY）
@@ -71,6 +87,7 @@ type Session struct {
 
 	mu      sync.Mutex
 	client  *gossh.Client
+	hops    []*gossh.Client // 跳板链各跳客户端（含最终目标），按建立顺序
 	sess    *gossh.Session
 	stdin   io.WriteCloser
 	state   string
@@ -136,18 +153,72 @@ func (s *Session) isCurrentClient(client *gossh.Client) bool {
 
 // ---------- 连接 ----------
 
-func (s *Session) connectOnce() error {
-	auth, err := buildAuth(s.cfg)
-	if err != nil {
-		return fmt.Errorf("auth setup: %w", err)
+// dialChain 建立到目标机的 SSH 客户端；配置了跳板链时逐跳打隧道。
+// 返回最终客户端与全部跳客户端（用于统一关闭）。
+func (s *Session) dialChain() (*gossh.Client, []*gossh.Client, error) {
+	var hops []*gossh.Client
+	closeAll := func() {
+		for i := len(hops) - 1; i >= 0; i-- {
+			_ = hops[i].Close()
+		}
+	}
+	var prev *gossh.Client
+	for i := range s.cfg.Jumps {
+		j := &s.cfg.Jumps[i]
+		conn, err := dialHop(prev, j.hostPort())
+		if err != nil {
+			closeAll()
+			return nil, nil, fmt.Errorf("jump %d (%s): %w", i+1, j.hostPort(), err)
+		}
+		ccfg, err := s.clientConfigFor(j)
+		if err != nil {
+			_ = conn.Close()
+			closeAll()
+			return nil, nil, err
+		}
+		c, chans, reqs, err := gossh.NewClientConn(conn, j.hostPort(), ccfg)
+		if err != nil {
+			_ = conn.Close()
+			closeAll()
+			return nil, nil, err
+		}
+		prev = gossh.NewClient(c, chans, reqs)
+		hops = append(hops, prev)
 	}
 
-	client, err := gossh.Dial("tcp", s.cfg.hostPort(), &gossh.ClientConfig{
-		User:            s.cfg.Username,
-		Auth:            auth,
-		HostKeyCallback: s.hostKeyCallback(),
-		Timeout:         15 * time.Second,
-	})
+	target := s.cfg.hostPort()
+	conn, err := dialHop(prev, target)
+	if err != nil {
+		closeAll()
+		return nil, nil, err
+	}
+	ccfg, err := s.clientConfigFor(&s.cfg)
+	if err != nil {
+		_ = conn.Close()
+		closeAll()
+		return nil, nil, err
+	}
+	c, chans, reqs, err := gossh.NewClientConn(conn, target, ccfg)
+	if err != nil {
+		_ = conn.Close()
+		closeAll()
+		return nil, nil, err
+	}
+	client := gossh.NewClient(c, chans, reqs)
+	hops = append(hops, client)
+	return client, hops, nil
+}
+
+// dialHop 直连（prev 为空）或经前一跳客户端隧道拨号
+func dialHop(prev *gossh.Client, addr string) (net.Conn, error) {
+	if prev == nil {
+		return net.DialTimeout("tcp", addr, 15*time.Second)
+	}
+	return prev.Dial("tcp", addr)
+}
+
+func (s *Session) connectOnce() error {
+	client, hops, err := s.dialChain()
 	if err != nil {
 		var hke *HostKeyError
 		if errors.As(err, &hke) {
@@ -158,7 +229,7 @@ func (s *Session) connectOnce() error {
 
 	sess, err := client.NewSession()
 	if err != nil {
-		_ = client.Close()
+		closeHops(hops)
 		return fmt.Errorf("new session: %w", err)
 	}
 	// stdout/stderr 合并写入 batcher（终端惯例：合并展示）
@@ -168,7 +239,7 @@ func (s *Session) connectOnce() error {
 	stdin, err := sess.StdinPipe()
 	if err != nil {
 		_ = sess.Close()
-		_ = client.Close()
+		closeHops(hops)
 		return fmt.Errorf("stdin pipe: %w", err)
 	}
 
@@ -183,17 +254,18 @@ func (s *Session) connectOnce() error {
 	// 80 行×24 列，top 按错误的屏幕模型重画（每帧交错下沉的根因）
 	if err := sess.RequestPty("xterm-256color", 24, 80, modes); err != nil {
 		_ = sess.Close()
-		_ = client.Close()
+		closeHops(hops)
 		return fmt.Errorf("request pty: %w", err)
 	}
 	if err := sess.Shell(); err != nil {
 		_ = sess.Close()
-		_ = client.Close()
+		closeHops(hops)
 		return fmt.Errorf("start shell: %w", err)
 	}
 
 	s.mu.Lock()
 	s.client = client
+	s.hops = hops
 	s.sess = sess
 	s.stdin = stdin
 	s.state = StateConnected
@@ -221,11 +293,12 @@ func (s *Session) connectOnce() error {
 	return nil
 }
 
-// hostKeyCallback TOFU 逻辑：unknown + TrustMode=add 时写入条目放行；
+// hostKeyCallbackFor TOFU 逻辑：unknown + TrustMode=add 时写入条目放行；
 // changed + TrustMode=replace 时整行替换放行；其余情况中止握手并抛 HostKeyError。
-func (s *Session) hostKeyCallback() gossh.HostKeyCallback {
+// 跳板链每一跳都独立校验（错误里的 HostPort 指明是哪一台）。
+func (s *Session) hostKeyCallbackFor(cfg *ConnectConfig) gossh.HostKeyCallback {
 	return func(hostname string, _ net.Addr, key gossh.PublicKey) error {
-		hostPort := HostPort(hostname, s.cfg.Port)
+		hostPort := HostPort(hostname, cfg.Port)
 		err := s.mgr.checker.Verify(hostPort, key)
 		if err == nil {
 			return nil
@@ -365,16 +438,22 @@ func (s *Session) Close() {
 
 func (s *Session) dropTransport() {
 	s.mu.Lock()
-	client, sess := s.client, s.sess
+	sess, hops := s.sess, s.hops
 	s.client = nil
 	s.sess = nil
 	s.stdin = nil
+	s.hops = nil
 	s.mu.Unlock()
 	if sess != nil {
 		_ = sess.Close()
 	}
-	if client != nil {
-		_ = client.Close()
+	closeHops(hops)
+}
+
+// closeHops 逆序关闭跳板链（先关最终目标，再逐跳回收）
+func closeHops(hops []*gossh.Client) {
+	for i := len(hops) - 1; i >= 0; i-- {
+		_ = hops[i].Close()
 	}
 }
 

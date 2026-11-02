@@ -101,8 +101,13 @@ export default {
     title: '从 Xshell 导入',
     pickDir: '选择 Xshell 会话目录',
     empty: '该目录下没有 .xsh 会话文件',
-    warning:
+    warning_xshell:
       '仅迁移 主机 / 端口 / 用户名 / 认证方式。Xshell 的密码为本机加密存储无法迁移、密钥为专有格式不可直接使用——导入后首次连接时会引导你补录凭据。',
+    warning_finalshell:
+      '仅迁移 名称 / 主机 / 端口 / 用户名。FinalShell 的密码为同机加密存储、密钥为私有格式，均不可迁移——导入后首次连接时会引导你补录凭据。',
+    path_xshell: '典型路径：%USERPROFILE%\\Documents\\NetSarang\\Xshell\\Sessions',
+    path_finalshell: '典型路径：%APPDATA%\\finalshell\\conn',
+    hasProxy: '含跳板',
     noneSelected: '请至少勾选一个有效会话',
     importBtn: '导入 {n} 项',
     done: '成功导入 {n} 台主机（已存在的同配置主机会自动跳过）',
@@ -155,6 +160,7 @@ export default {
     authPassword: '密码',
     authKey: '私钥',
     authKbd: '键盘交互（2FA）',
+    authAgent: 'SSH Agent（本机代理）',
     password: '密码',
     passwordNew: '输入密码',
     passwordKeep: '已保存；留空则不修改',
@@ -165,6 +171,9 @@ export default {
     passphraseKeep: '已保存；留空则不修改',
     keepalive: 'Keepalive（秒）',
     autoReconnect: '断线自动重连',
+    proxyChain: '跳板链',
+    proxyChainTip: '按顺序选择跳板主机（最多 3 跳）',
+    proxyChainHelp: '留空表示直连；选择多台时按所选顺序逐跳建立隧道，每跳使用各自的凭据',
     initCommands: '初始命令',
     initCommandsTip: '登录成功后按顺序执行；回车添加，点标签移除',
     requiredTip: '名称与主机地址为必填项',

@@ -2,22 +2,24 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
-import { NButton, NCheckbox, NEmpty, NModal, NSpin } from 'naive-ui'
-import { PickDir, XshellImport, XshellScanDir } from '../../wailsjs/go/app/Service'
-import type { xshell } from '../../wailsjs/go/models'
+import { NButton, NCheckbox, NEmpty, NModal, NRadioButton, NRadioGroup, NSpin } from 'naive-ui'
+import { ImportHosts, PickDir, ScanImportDir } from '../../wailsjs/go/app/Service'
+import type { app } from '../../wailsjs/go/models'
 
-// Xshell 会话批量导入：选目录 → 预览勾选 → 导入为根分组下的主机。
-// 密码/密钥不可迁移（Xshell 本机加密存储），首次连接时引导补录。
+// 第三方客户端批量导入（Xshell / FinalShell）：选来源与目录 → 预览勾选 → 导入。
+// 两家客户端的密码/密钥均为本机私有加密格式不可迁移，首次连接时引导补录。
 const props = defineProps<{ show: boolean }>()
 const emit = defineEmits<{ (e: 'update:show', v: boolean): void; (e: 'imported', n: number): void }>()
 
 const { t } = useI18n()
 const message = useMessage()
 
+type Source = 'xshell' | 'finalshell'
+const source = ref<Source>('xshell')
 const scanning = ref(false)
 const importing = ref(false)
 const dir = ref('')
-const list = ref<xshell.Preview[]>([])
+const list = ref<app.ImportPreview[]>([])
 const checked = ref<Set<string>>(new Set())
 
 const showModal = computed({
@@ -25,13 +27,19 @@ const showModal = computed({
   set: (v) => emit('update:show', v),
 })
 
+function onSourceChange() {
+  list.value = []
+  checked.value = new Set()
+  dir.value = ''
+}
+
 async function pickAndScan() {
   const d = await PickDir()
   if (!d) return
   dir.value = d
   scanning.value = true
   try {
-    const list0 = await XshellScanDir(d)
+    const list0 = await ScanImportDir(source.value, d)
     list.value = list0 ?? []
     checked.value = new Set(list.value.filter((p) => p.valid).map((p) => p.file))
   } catch (e) {
@@ -56,7 +64,7 @@ async function doImport() {
   }
   importing.value = true
   try {
-    const n = await XshellImport(sel)
+    const n = await ImportHosts(sel)
     message.success(t('import.done', { n }))
     emit('imported', n)
     emit('update:show', false)
@@ -67,7 +75,7 @@ async function doImport() {
   }
 }
 
-function authLabel(p: xshell.Preview): string {
+function authLabel(p: app.ImportPreview): string {
   switch (p.authType) {
     case 'key':
       return t('hostForm.authKey') + (p.keyName ? ` (${p.keyName})` : '')
@@ -86,7 +94,12 @@ function authLabel(p: xshell.Preview): string {
     :title="t('import.title')"
     style="width: 640px"
   >
-    <p class="warning">{{ t('import.warning') }}</p>
+    <n-radio-group v-model:value="source" size="small" class="source-group" @update:value="onSourceChange">
+      <n-radio-button value="xshell">Xshell</n-radio-button>
+      <n-radio-button value="finalshell">FinalShell</n-radio-button>
+    </n-radio-group>
+    <p class="warning">{{ t(`import.warning_${source}`) }}</p>
+    <p class="path-hint">{{ t(`import.path_${source}`) }}</p>
     <div class="step">
       <n-button type="primary" :loading="scanning" @click="pickAndScan">
         {{ t('import.pickDir') }}
@@ -106,7 +119,10 @@ function authLabel(p: xshell.Preview): string {
           <span class="name">{{ p.name }}</span>
           <span class="host">{{ p.host }}:{{ p.port }}</span>
           <span class="user">{{ p.username }}</span>
-          <span class="auth">{{ p.valid ? authLabel(p) : p.skipReason }}</span>
+          <span class="auth">
+            {{ p.valid ? authLabel(p) : p.skipReason }}
+            <span v-if="p.hasProxy" class="proxy-tag">{{ t('import.hasProxy') }}</span>
+          </span>
         </div>
       </div>
     </n-spin>
@@ -121,6 +137,23 @@ function authLabel(p: xshell.Preview): string {
 </template>
 
 <style scoped>
+.source-group {
+  margin-bottom: 10px;
+}
+.path-hint {
+  margin: -6px 0 10px;
+  font-size: 11px;
+  opacity: 0.45;
+  word-break: break-all;
+}
+.proxy-tag {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(99, 226, 183, 0.15);
+  color: #63e2b7;
+  font-size: 10px;
+}
 .warning {
   margin: 0 0 12px;
   padding: 8px 12px;

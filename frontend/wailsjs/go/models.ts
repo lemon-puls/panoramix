@@ -31,6 +31,7 @@ export namespace app {
 	    keyPath: string;
 	    hasSecret: boolean;
 	    initCommands: string[];
+	    proxyChain: string[];
 	    keepaliveSec: number;
 	    autoReconnect: boolean;
 	    // Go type: time
@@ -59,6 +60,7 @@ export namespace app {
 	        this.keyPath = source["keyPath"];
 	        this.hasSecret = source["hasSecret"];
 	        this.initCommands = source["initCommands"];
+	        this.proxyChain = source["proxyChain"];
 	        this.keepaliveSec = source["keepaliveSec"];
 	        this.autoReconnect = source["autoReconnect"];
 	        this.lastConnectedAt = this.convertValues(source["lastConnectedAt"], null);
@@ -86,6 +88,38 @@ export namespace app {
 		    }
 		    return a;
 		}
+	}
+	export class ImportPreview {
+	    source: string;
+	    file: string;
+	    name: string;
+	    host: string;
+	    port: number;
+	    username: string;
+	    authType: string;
+	    keyName?: string;
+	    hasProxy?: boolean;
+	    valid: boolean;
+	    skipReason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.file = source["file"];
+	        this.name = source["name"];
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.username = source["username"];
+	        this.authType = source["authType"];
+	        this.keyName = source["keyName"];
+	        this.hasProxy = source["hasProxy"];
+	        this.valid = source["valid"];
+	        this.skipReason = source["skipReason"];
+	    }
 	}
 
 }
@@ -227,6 +261,7 @@ export namespace store {
 	    keyPath: string;
 	    hasSecret: boolean;
 	    initCommands: string[];
+	    proxyChain: string[];
 	    keepaliveSec: number;
 	    autoReconnect: boolean;
 	    // Go type: time
@@ -253,6 +288,7 @@ export namespace store {
 	        this.keyPath = source["keyPath"];
 	        this.hasSecret = source["hasSecret"];
 	        this.initCommands = source["initCommands"];
+	        this.proxyChain = source["proxyChain"];
 	        this.keepaliveSec = source["keepaliveSec"];
 	        this.autoReconnect = source["autoReconnect"];
 	        this.lastConnectedAt = this.convertValues(source["lastConnectedAt"], null);
@@ -320,39 +356,6 @@ export namespace store {
 		    }
 		    return a;
 		}
-	}
-
-}
-
-export namespace xshell {
-	
-	export class Preview {
-	    file: string;
-	    name: string;
-	    host: string;
-	    port: number;
-	    username: string;
-	    authType: string;
-	    keyName?: string;
-	    valid: boolean;
-	    skipReason?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new Preview(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.file = source["file"];
-	        this.name = source["name"];
-	        this.host = source["host"];
-	        this.port = source["port"];
-	        this.username = source["username"];
-	        this.authType = source["authType"];
-	        this.keyName = source["keyName"];
-	        this.valid = source["valid"];
-	        this.skipReason = source["skipReason"];
-	    }
 	}
 
 }

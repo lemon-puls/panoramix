@@ -39,6 +39,7 @@ const form = reactive({
   username: 'root',
   authType: 'password' as string,
   keyPath: '',
+  proxyChain: [] as string[],
   password: '',
   passphrase: '',
   keepaliveSec: 30,
@@ -57,6 +58,7 @@ watch(
     form.username = h?.username || 'root'
     form.authType = h?.authType ?? 'password'
     form.keyPath = h?.keyPath ?? ''
+    form.proxyChain = [...(h?.proxyChain ?? [])]
     form.password = '' // 凭据字段永不回填
     form.passphrase = ''
     form.keepaliveSec = h?.keepaliveSec ?? 30
@@ -74,7 +76,15 @@ const authOptions = computed(() => [
   { label: t('hostForm.authPassword'), value: 'password' },
   { label: t('hostForm.authKey'), value: 'key' },
   { label: t('hostForm.authKbd'), value: 'keyboard_interactive' },
+  { label: t('hostForm.authAgent'), value: 'agent' },
 ])
+
+// 跳板候选：已有主机中排除自己（防止自环；跨主机环由后端二次校验）
+const proxyOptions = computed(() =>
+  store.hosts
+    .filter((h) => h.id !== props.host?.id)
+    .map((h) => ({ label: `${h.name} (${h.addr})`, value: h.id })),
+)
 
 async function save() {
   if (!form.name.trim() || !form.addr.trim()) {
@@ -92,6 +102,7 @@ async function save() {
       username: form.username.trim(),
       authType: form.authType,
       keyPath: form.keyPath.trim(),
+      proxyChain: [...form.proxyChain],
       initCommands: [...form.initCommands],
       keepaliveSec: form.keepaliveSec > 0 ? form.keepaliveSec : 30,
       autoReconnect: form.autoReconnect,
@@ -165,6 +176,17 @@ async function save() {
       <n-form-item :label="t('hostForm.autoReconnect')">
         <n-switch v-model:value="form.autoReconnect" />
       </n-form-item>
+      <n-form-item :label="t('hostForm.proxyChain')">
+        <n-select
+          v-model:value="form.proxyChain"
+          multiple
+          filterable
+          clearable
+          :options="proxyOptions"
+          :placeholder="t('hostForm.proxyChainTip')"
+        />
+      </n-form-item>
+      <p class="tip">{{ t('hostForm.proxyChainHelp') }}</p>
       <n-form-item :label="t('hostForm.initCommands')">
         <n-dynamic-tags v-model:value="form.initCommands" />
       </n-form-item>

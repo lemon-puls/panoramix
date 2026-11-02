@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
 )
 
 // Manager 管理全部活跃 SSH 会话；是 internal/app 操作 SSH 的唯一入口。
@@ -17,6 +18,51 @@ type Manager struct {
 	em             Emitter
 	knownHostsPath string
 	logsDir        string
+
+	// SSH agent 客户端缓存（agent 连接可跨会话复用，避免每次连接泄漏）
+	agentMu      sync.Mutex
+	agentClient  agent.ExtendedAgent
+	agentCleanup func()
+	agentErr     error
+	agentTried   bool
+}
+
+// authFor 返回指定配置可用的认证方法；agent 类型懒加载并缓存 agent 连接
+func (m *Manager) authFor(cfg ConnectConfig) ([]gossh.AuthMethod, error) {
+	if cfg.AuthType != "agent" {
+		return buildAuth(cfg)
+	}
+	ag, err := m.getAgent()
+	if err != nil {
+		return nil, err
+	}
+	return agentAuthMethods(ag), nil
+}
+
+func (m *Manager) getAgent() (agent.ExtendedAgent, error) {
+	m.agentMu.Lock()
+	defer m.agentMu.Unlock()
+	if m.agentTried {
+		return m.agentClient, m.agentErr
+	}
+	m.agentTried = true
+	ag, cleanup, err := dialAgent()
+	if err != nil {
+		m.agentErr = fmt.Errorf("connect ssh-agent: %w", err)
+		return nil, m.agentErr
+	}
+	m.agentClient, m.agentCleanup = ag, cleanup
+	return ag, nil
+}
+
+// Shutdown 释放 Manager 持有的资源（agent 连接）；不影响活跃会话
+func (m *Manager) Shutdown() {
+	m.agentMu.Lock()
+	if m.agentCleanup != nil {
+		m.agentCleanup()
+		m.agentCleanup = nil
+	}
+	m.agentMu.Unlock()
 }
 
 // NewManager 创建会话管理器（knownHostsPath/logsDir 由 main 依配置目录注入）

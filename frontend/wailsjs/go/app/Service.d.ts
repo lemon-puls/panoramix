@@ -3,7 +3,6 @@
 import {app} from '../models';
 import {store} from '../models';
 import {sftp} from '../models';
-import {xshell} from '../models';
 
 export function CloseSession(arg1:string):Promise<void>;
 
@@ -16,6 +15,8 @@ export function DeleteHost(arg1:string):Promise<void>;
 export function DeleteHostSecret(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteSnippet(arg1:string):Promise<void>;
+
+export function ImportHosts(arg1:Array<app.ImportPreview>):Promise<number>;
 
 export function IsSessionLogEnabled():Promise<boolean>;
 
@@ -45,6 +46,8 @@ export function SaveHost(arg1:app.HostInput):Promise<store.Host>;
 
 export function SaveSnippet(arg1:store.Snippet):Promise<store.Snippet>;
 
+export function ScanImportDir(arg1:string,arg2:string):Promise<Array<app.ImportPreview>>;
+
 export function SetHostSecret(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function SetSessionLogEnabled(arg1:boolean):Promise<void>;
@@ -70,7 +73,3 @@ export function TransferCancel(arg1:string):Promise<void>;
 export function TransferRetry(arg1:string):Promise<void>;
 
 export function WriteSession(arg1:string,arg2:string):Promise<void>;
-
-export function XshellImport(arg1:Array<xshell.Preview>):Promise<number>;
-
-export function XshellScanDir(arg1:string):Promise<Array<xshell.Preview>>;
