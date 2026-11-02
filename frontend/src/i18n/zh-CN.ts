@@ -88,6 +88,9 @@ export default {
     title: '传输队列',
     empty: '暂无传输任务',
     resumed: '续传',
+    pause: '暂停',
+    resume: '继续',
+    speedLimit: '全局限速（KB/s，0 不限）',
   },
   monitor: {
     toggle: '监控',

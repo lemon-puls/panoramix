@@ -116,6 +116,12 @@ func main() {
 
 	svc := app.NewService(st, secrets, em, mgr, queue, editor, dlg)
 
+	// 恢复上次保存的全局限速
+	if kbps, err := svc.GetTransferSpeedLimit(); err == nil && kbps > 0 {
+		queue.SetSpeedLimit(kbps)
+		log.Printf("[main] transfer speed limit restored: %d KB/s", kbps)
+	}
+
 	if err := wails.Run(&options.App{
 		Title:            "Panoramix",
 		Width:            1280,

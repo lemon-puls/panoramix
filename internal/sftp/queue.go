@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/sftp"
@@ -25,6 +26,7 @@ const (
 	StateCanceled       = "canceled"
 	StateFailed         = "failed"
 	StateAwaitingPolicy = "awaiting_policy"
+	StatePaused         = "paused"
 )
 
 // 覆盖策略
@@ -69,6 +71,7 @@ type taskHandle struct {
 	policyCh      chan string
 	targetExisted bool
 	lastEmit      time.Time
+	paused        atomic.Bool
 }
 
 func (h *taskHandle) snapshot() Task {
@@ -105,6 +108,8 @@ type Queue struct {
 
 	batchMu     sync.Mutex
 	batchPolicy map[string]string // batchID → "全部应用"记住的策略
+
+	limitBps atomic.Int64 // 全局限速（字节/秒，0=不限）
 }
 
 func NewQueue(src ClientSource, em Emitter) *Queue {
@@ -303,7 +308,8 @@ func (q *Queue) pump() {
 			h.mu.Lock()
 			st := h.State
 			h.mu.Unlock()
-			if st == StateRunning || st == StateAwaitingPolicy {
+			// 暂停中的任务仍持有 worker 槽（goroutine 阻塞在暂停等待）
+			if st == StateRunning || st == StateAwaitingPolicy || st == StatePaused {
 				running++
 			} else if st == StatePending && next == nil {
 				next = h
@@ -608,11 +614,30 @@ func (q *Queue) copyWithProgress(h *taskHandle, src io.Reader, dst io.Writer) (i
 	h.mu.Lock()
 	total := h.Transferred // 续传基数
 	h.mu.Unlock()
+	start := time.Now()
+	startBytes := total
 	last := time.Now()
 	lastBytes := total
 	for {
 		if h.canceled() {
 			return total, errCanceled
+		}
+		// 暂停：阻塞等待恢复或取消（100ms 轮询，避免忙等）
+		for h.paused.Load() {
+			select {
+			case <-h.cancel:
+				return total, errCanceled
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+		// 全局限速：按已传输量与目标速率校准睡眠
+		if limit := q.limitBps.Load(); limit > 0 {
+			elapsed := time.Since(start)
+			sent := total - startBytes
+			expected := time.Duration(float64(sent)/float64(limit)*float64(time.Second)) - elapsed
+			if expected > 0 {
+				time.Sleep(expected)
+			}
 		}
 		n, rerr := src.Read(buf)
 		if n > 0 {
@@ -716,12 +741,64 @@ func (q *Queue) Cancel(taskID string) error {
 		h.mu.Unlock()
 		q.emit(h)
 		q.pump()
-	case StateRunning:
+	case StateRunning, StatePaused:
 		h.cancelOnce.Do(func() { close(h.cancel) }) // 拷贝循环负责置态/清理
 	default:
 		return fmt.Errorf("transfer already finished: %s", taskID)
 	}
 	return nil
+}
+
+// Pause 暂停运行中的任务（保留连接与进度；排队中的任务直接置为暂停态）
+func (q *Queue) Pause(taskID string) error {
+	q.mu.Lock()
+	h, ok := q.tasks[taskID]
+	q.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("transfer not found: %s", taskID)
+	}
+	h.mu.Lock()
+	st := h.State
+	if st == StateRunning {
+		h.State = StatePaused
+		h.paused.Store(true)
+	}
+	h.mu.Unlock()
+	if st != StateRunning {
+		return fmt.Errorf("only running transfers can be paused")
+	}
+	q.emit(h)
+	return nil
+}
+
+// Resume 恢复已暂停的任务
+func (q *Queue) Resume(taskID string) error {
+	q.mu.Lock()
+	h, ok := q.tasks[taskID]
+	q.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("transfer not found: %s", taskID)
+	}
+	h.mu.Lock()
+	st := h.State
+	if st == StatePaused {
+		h.State = StateRunning
+		h.paused.Store(false)
+	}
+	h.mu.Unlock()
+	if st != StatePaused {
+		return fmt.Errorf("transfer is not paused")
+	}
+	q.emit(h)
+	return nil
+}
+
+// SetSpeedLimit 设置全局限速（KB/s，0 表示不限）；对进行中的任务即时生效
+func (q *Queue) SetSpeedLimit(kbps int) {
+	if kbps < 0 {
+		kbps = 0
+	}
+	q.limitBps.Store(int64(kbps) * 1024)
 }
 
 // Retry 重试失败/取消的任务（复用原 ID，重置进度重新入队）

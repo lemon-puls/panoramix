@@ -30,6 +30,10 @@ export function FinishRemoteEdit(arg1) {
   return window['go']['app']['Service']['FinishRemoteEdit'](arg1);
 }
 
+export function GetTransferSpeedLimit() {
+  return window['go']['app']['Service']['GetTransferSpeedLimit']();
+}
+
 export function ImportHosts(arg1) {
   return window['go']['app']['Service']['ImportHosts'](arg1);
 }
@@ -56,6 +60,10 @@ export function ListSnippets() {
 
 export function ListTransfers() {
   return window['go']['app']['Service']['ListTransfers']();
+}
+
+export function PauseTransfer(arg1) {
+  return window['go']['app']['Service']['PauseTransfer'](arg1);
 }
 
 export function PickDir() {
@@ -86,6 +94,10 @@ export function ResolveEditConflict(arg1, arg2) {
   return window['go']['app']['Service']['ResolveEditConflict'](arg1, arg2);
 }
 
+export function ResumeTransfer(arg1) {
+  return window['go']['app']['Service']['ResumeTransfer'](arg1);
+}
+
 export function SaveGroup(arg1) {
   return window['go']['app']['Service']['SaveGroup'](arg1);
 }
@@ -112,6 +124,10 @@ export function SetSessionLogEnabled(arg1) {
 
 export function SetTransferPolicy(arg1, arg2, arg3) {
   return window['go']['app']['Service']['SetTransferPolicy'](arg1, arg2, arg3);
+}
+
+export function SetTransferSpeedLimit(arg1) {
+  return window['go']['app']['Service']['SetTransferSpeedLimit'](arg1);
 }
 
 export function SftpDownload(arg1, arg2, arg3) {

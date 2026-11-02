@@ -649,6 +649,51 @@ func (s *Service) TransferRetry(taskID string) error {
 	return s.transfers.Retry(taskID)
 }
 
+// PauseTransfer 暂停运行中的传输任务（保留连接与进度）
+func (s *Service) PauseTransfer(taskID string) error {
+	if s.transfers == nil {
+		return fmt.Errorf("transfer queue not ready")
+	}
+	return s.transfers.Pause(taskID)
+}
+
+// ResumeTransfer 恢复已暂停的传输任务
+func (s *Service) ResumeTransfer(taskID string) error {
+	if s.transfers == nil {
+		return fmt.Errorf("transfer queue not ready")
+	}
+	return s.transfers.Resume(taskID)
+}
+
+// SetTransferSpeedLimit 设置全局限速（KB/s，0=不限）；持久化到 settings
+func (s *Service) SetTransferSpeedLimit(kbps int) error {
+	if s.transfers == nil {
+		return fmt.Errorf("transfer queue not ready")
+	}
+	if kbps < 0 {
+		kbps = 0
+	}
+	s.transfers.SetSpeedLimit(kbps)
+	if err := s.store.SetSetting("transfer_speed_limit_kbps", strconv.Itoa(kbps)); err != nil {
+		return fmt.Errorf("save setting: %w", err)
+	}
+	log.Printf("[app] transfer speed limit set to %d KB/s", kbps)
+	return nil
+}
+
+// GetTransferSpeedLimit 读取当前全局限速（KB/s）
+func (s *Service) GetTransferSpeedLimit() (int, error) {
+	v, ok, err := s.store.GetSetting("transfer_speed_limit_kbps")
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, nil
+	}
+	n, _ := strconv.Atoi(v)
+	return n, nil
+}
+
 // SetTransferPolicy 覆盖冲突策略（applyAll=true 记住整批）
 func (s *Service) SetTransferPolicy(batchID, mode string, applyAll bool) error {
 	if s.transfers == nil {

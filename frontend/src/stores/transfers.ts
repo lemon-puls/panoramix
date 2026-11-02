@@ -19,7 +19,7 @@ export interface TransferTask {
   localPath: string
   size: number
   transferred: number
-  state: string // pending|running|done|skipped|canceled|failed|awaiting_policy
+  state: string // pending|running|paused|done|skipped|canceled|failed|awaiting_policy
   speedBps: number
   resumed?: boolean
   err?: string

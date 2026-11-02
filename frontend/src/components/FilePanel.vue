@@ -8,6 +8,7 @@ import { useFilesStore } from '../stores/files'
 import { useTerminalsStore } from '../stores/terminals'
 import { useEditsStore, type EditEvent } from '../stores/edits'
 import { useTransfersStore, formatSize, type ConflictInfo } from '../stores/transfers'
+import { PauseTransfer, ResumeTransfer } from '../../wailsjs/go/app/Service'
 import * as models from '../../wailsjs/go/models'
 
 // 远程文件面板：路径栏 + 条目列表 + 右键操作 + 拖拽上传 + 冲突决策
@@ -359,7 +360,19 @@ function fmtMtime(v: unknown): string {
             <span class="tstate" :class="tk.state">{{ tk.state }}</span>
             <span class="tops">
               <span
-                v-if="tk.state === 'running' || tk.state === 'pending' || tk.state === 'awaiting_policy'"
+                v-if="tk.state === 'running'"
+                class="op"
+                :title="t('transfers.pause')"
+                @click="PauseTransfer(tk.transferId)"
+              >⏸</span>
+              <span
+                v-if="tk.state === 'paused'"
+                class="op"
+                :title="t('transfers.resume')"
+                @click="ResumeTransfer(tk.transferId)"
+              >▶</span>
+              <span
+                v-if="tk.state === 'running' || tk.state === 'paused' || tk.state === 'pending' || tk.state === 'awaiting_policy'"
                 class="op"
                 @click="transfers.cancel(tk.transferId)"
               >×</span>
@@ -561,6 +574,9 @@ function fmtMtime(v: unknown): string {
 .tstate.canceled,
 .tstate.skipped {
   opacity: 0.5;
+}
+.tstate.paused {
+  color: #f0c674;
 }
 .tresume {
   margin-left: 4px;

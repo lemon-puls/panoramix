@@ -18,6 +18,8 @@ export function DeleteSnippet(arg1:string):Promise<void>;
 
 export function FinishRemoteEdit(arg1:string):Promise<void>;
 
+export function GetTransferSpeedLimit():Promise<number>;
+
 export function ImportHosts(arg1:Array<app.ImportPreview>):Promise<number>;
 
 export function IsSessionLogEnabled():Promise<boolean>;
@@ -31,6 +33,8 @@ export function ListRemoteEdits():Promise<Array<sftp.EditInfo>>;
 export function ListSnippets():Promise<Array<store.Snippet>>;
 
 export function ListTransfers():Promise<Array<sftp.Task>>;
+
+export function PauseTransfer(arg1:string):Promise<void>;
 
 export function PickDir():Promise<string>;
 
@@ -46,6 +50,8 @@ export function ResizeSession(arg1:string,arg2:number,arg3:number):Promise<void>
 
 export function ResolveEditConflict(arg1:string,arg2:boolean):Promise<void>;
 
+export function ResumeTransfer(arg1:string):Promise<void>;
+
 export function SaveGroup(arg1:store.Group):Promise<store.Group>;
 
 export function SaveHost(arg1:app.HostInput):Promise<store.Host>;
@@ -59,6 +65,8 @@ export function SetHostSecret(arg1:string,arg2:string,arg3:string):Promise<void>
 export function SetSessionLogEnabled(arg1:boolean):Promise<void>;
 
 export function SetTransferPolicy(arg1:string,arg2:string,arg3:boolean):Promise<void>;
+
+export function SetTransferSpeedLimit(arg1:number):Promise<void>;
 
 export function SftpDownload(arg1:string,arg2:string,arg3:string):Promise<string>;
 
