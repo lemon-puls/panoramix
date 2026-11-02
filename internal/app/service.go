@@ -105,6 +105,7 @@ func (s *Service) buildConnectConfig(h *store.Host, trustMode string, sessionLog
 		AuthType:      string(h.AuthType),
 		KeyPath:       h.KeyPath,
 		InitCommands:  h.InitCommands,
+		LoginScript:   toSSHLoginScript(h.LoginScript),
 		KeepaliveSec:  h.KeepaliveSec,
 		AutoReconnect: h.AutoReconnect,
 		SessionLog:    sessionLog,
@@ -135,6 +136,21 @@ func (s *Service) buildConnectConfig(h *store.Host, trustMode string, sessionLog
 			Message: "unsupported auth type: " + cfg.AuthType}
 	}
 	return cfg, nil
+}
+
+// toSSHLoginScript 把存储层的登录脚本转换为 ssh 包的结构（依赖方向保持单向）
+func toSSHLoginScript(steps []store.LoginStep) []ssh.LoginStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]ssh.LoginStep, 0, len(steps))
+	for _, st := range steps {
+		if st.Expect == "" {
+			continue
+		}
+		out = append(out, ssh.LoginStep{Expect: st.Expect, Send: st.Send})
+	}
+	return out
 }
 
 // clearSecrets 清空配置及跳板链中的凭据（Start 之后立即调用）

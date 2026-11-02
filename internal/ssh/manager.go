@@ -93,6 +93,7 @@ func (m *Manager) Start(cfg ConnectConfig) (string, error) {
 	}
 	// flush 里引用 session（写日志 + 推送终端输出）
 	batcher.flush = func(data []byte) {
+		s.tryLoginScript(data)
 		s.writeLog(data)
 		s.em.Emit("terminal:output", map[string]interface{}{
 			"sessionId": s.id, "dataB64": base64Std(data),

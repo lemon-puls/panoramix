@@ -31,6 +31,7 @@ export namespace app {
 	    keyPath: string;
 	    hasSecret: boolean;
 	    initCommands: string[];
+	    loginScript: store.LoginStep[];
 	    proxyChain: string[];
 	    keepaliveSec: number;
 	    autoReconnect: boolean;
@@ -60,6 +61,7 @@ export namespace app {
 	        this.keyPath = source["keyPath"];
 	        this.hasSecret = source["hasSecret"];
 	        this.initCommands = source["initCommands"];
+	        this.loginScript = this.convertValues(source["loginScript"], store.LoginStep);
 	        this.proxyChain = source["proxyChain"];
 	        this.keepaliveSec = source["keepaliveSec"];
 	        this.autoReconnect = source["autoReconnect"];
@@ -274,6 +276,20 @@ export namespace store {
 		    return a;
 		}
 	}
+	export class LoginStep {
+	    expect: string;
+	    send: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LoginStep(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.expect = source["expect"];
+	        this.send = source["send"];
+	    }
+	}
 	export class Host {
 	    id: string;
 	    groupId: string;
@@ -285,6 +301,7 @@ export namespace store {
 	    keyPath: string;
 	    hasSecret: boolean;
 	    initCommands: string[];
+	    loginScript: LoginStep[];
 	    proxyChain: string[];
 	    keepaliveSec: number;
 	    autoReconnect: boolean;
@@ -312,6 +329,7 @@ export namespace store {
 	        this.keyPath = source["keyPath"];
 	        this.hasSecret = source["hasSecret"];
 	        this.initCommands = source["initCommands"];
+	        this.loginScript = this.convertValues(source["loginScript"], LoginStep);
 	        this.proxyChain = source["proxyChain"];
 	        this.keepaliveSec = source["keepaliveSec"];
 	        this.autoReconnect = source["autoReconnect"];
@@ -339,6 +357,7 @@ export namespace store {
 		    return a;
 		}
 	}
+	
 	export class Snippet {
 	    id: string;
 	    name: string;

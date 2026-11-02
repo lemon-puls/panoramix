@@ -36,23 +36,30 @@ const (
 // 密码 / passphrase 不在本结构中，只存系统 keychain；
 // HasSecret 仅为展示标记（keychain 中是否存在凭据），由 service 层填充。
 type Host struct {
-	ID              string    `json:"id"`
-	GroupID         string    `json:"groupId"`
-	Name            string    `json:"name"`
-	Addr            string    `json:"addr"`
-	Port            int       `json:"port"`
-	Username        string    `json:"username"`
-	AuthType        AuthType  `json:"authType"`
-	KeyPath         string    `json:"keyPath"`      // 私钥文件路径（引用而非复制）
-	HasSecret       bool      `json:"hasSecret"`    // keychain 中是否已存凭据（只读）
-	InitCommands    []string  `json:"initCommands"` // 登录成功后按序执行的初始命令
-	ProxyChain      []string  `json:"proxyChain"`   // 跳板链：依次经过的主机 ID（空=直连）
-	KeepaliveSec    int       `json:"keepaliveSec"` // keepalive 间隔秒数，默认 30
-	AutoReconnect   bool      `json:"autoReconnect"`
-	LastConnectedAt time.Time `json:"lastConnectedAt"`
-	Sort            int       `json:"sort"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID              string      `json:"id"`
+	GroupID         string      `json:"groupId"`
+	Name            string      `json:"name"`
+	Addr            string      `json:"addr"`
+	Port            int         `json:"port"`
+	Username        string      `json:"username"`
+	AuthType        AuthType    `json:"authType"`
+	KeyPath         string      `json:"keyPath"`      // 私钥文件路径（引用而非复制）
+	HasSecret       bool        `json:"hasSecret"`    // keychain 中是否已存凭据（只读）
+	InitCommands    []string    `json:"initCommands"` // 登录成功后按序执行的初始命令
+	LoginScript     []LoginStep `json:"loginScript"`  // expect 式登录脚本（交互式二次认证）
+	ProxyChain      []string    `json:"proxyChain"`   // 跳板链：依次经过的主机 ID（空=直连）
+	KeepaliveSec    int         `json:"keepaliveSec"` // keepalive 间隔秒数，默认 30
+	AutoReconnect   bool        `json:"autoReconnect"`
+	LastConnectedAt time.Time   `json:"lastConnectedAt"`
+	Sort            int         `json:"sort"`
+	CreatedAt       time.Time   `json:"createdAt"`
+	UpdatedAt       time.Time   `json:"updatedAt"`
+}
+
+// LoginStep expect 式登录脚本的一步：输出匹配 Expect（正则）时发送 Send
+type LoginStep struct {
+	Expect string `json:"expect"`
+	Send   string `json:"send"`
 }
 
 // Snippet 命令片段（点击发送到当前终端；Content 支持 {host} 占位符）

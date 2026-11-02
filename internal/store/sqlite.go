@@ -81,6 +81,7 @@ func (s *sqliteStore) migrate() error {
 			auth_type         TEXT NOT NULL DEFAULT 'password',
 			key_path          TEXT NOT NULL DEFAULT '',
 			init_commands     TEXT NOT NULL DEFAULT '[]',
+			login_script      TEXT NOT NULL DEFAULT '[]',
 			proxy_chain       TEXT NOT NULL DEFAULT '[]',
 			keepalive_sec     INTEGER NOT NULL DEFAULT 30,
 			auto_reconnect    INTEGER NOT NULL DEFAULT 1,
@@ -124,6 +125,20 @@ func (s *sqliteStore) migrate() error {
 		}
 		if _, err := s.db.Exec(`UPDATE meta SET v='2' WHERE k='schema_version'`); err != nil {
 			return fmt.Errorf("set schema version 2: %w", err)
+		}
+		version = "2"
+	}
+	// v3：login_script（expect 式登录脚本）
+	if version < "3" {
+		if !s.columnExists("hosts", "login_script") {
+			if _, err := s.db.Exec(
+				`ALTER TABLE hosts ADD COLUMN login_script TEXT NOT NULL DEFAULT '[]'`); err != nil {
+				return fmt.Errorf("migrate v3: %w", err)
+			}
+			log.Printf("[store] schema migrated to v3 (login_script)")
+		}
+		if _, err := s.db.Exec(`UPDATE meta SET v='3' WHERE k='schema_version'`); err != nil {
+			return fmt.Errorf("set schema version 3: %w", err)
 		}
 	}
 	return nil
@@ -205,16 +220,16 @@ func (s *sqliteStore) DeleteGroup(id string) error {
 // ---------- 主机 ----------
 
 const hostColumns = `id, group_id, name, addr, port, username, auth_type, key_path,
-	init_commands, proxy_chain, keepalive_sec, auto_reconnect, last_connected_at, sort,
+	init_commands, login_script, proxy_chain, keepalive_sec, auto_reconnect, last_connected_at, sort,
 	created_at, updated_at`
 
 func scanHost(scanner interface{ Scan(...any) error }) (Host, error) {
 	var h Host
-	var authType, initCmds, proxyChain string
+	var authType, initCmds, loginScript, proxyChain string
 	var port, keepalive, autoRe, lastAt int64
 	var created, updated int64
 	if err := scanner.Scan(&h.ID, &h.GroupID, &h.Name, &h.Addr, &port, &h.Username,
-		&authType, &h.KeyPath, &initCmds, &proxyChain, &keepalive, &autoRe, &lastAt, &h.Sort,
+		&authType, &h.KeyPath, &initCmds, &loginScript, &proxyChain, &keepalive, &autoRe, &lastAt, &h.Sort,
 		&created, &updated); err != nil {
 		return h, err
 	}
@@ -228,6 +243,9 @@ func scanHost(scanner interface{ Scan(...any) error }) (Host, error) {
 	if err := json.Unmarshal([]byte(initCmds), &h.InitCommands); err != nil {
 		// 脏数据兜底：解析失败按空列表处理，不阻塞启动
 		h.InitCommands = []string{}
+	}
+	if err := json.Unmarshal([]byte(loginScript), &h.LoginScript); err != nil {
+		h.LoginScript = []LoginStep{}
 	}
 	if err := json.Unmarshal([]byte(proxyChain), &h.ProxyChain); err != nil {
 		h.ProxyChain = []string{}
@@ -266,6 +284,13 @@ func (s *sqliteStore) SaveHost(h *Host) error {
 	if h.ProxyChain == nil {
 		h.ProxyChain = []string{}
 	}
+	if h.LoginScript == nil {
+		h.LoginScript = []LoginStep{}
+	}
+	script, err := json.Marshal(h.LoginScript)
+	if err != nil {
+		return fmt.Errorf("marshal login script: %w", err)
+	}
 	cmds, err := json.Marshal(h.InitCommands)
 	if err != nil {
 		return fmt.Errorf("marshal init commands: %w", err)
@@ -279,14 +304,14 @@ func (s *sqliteStore) SaveHost(h *Host) error {
 		h.ID = NewID()
 		h.CreatedAt = time.Unix(now, 0)
 		h.UpdatedAt = h.CreatedAt
-		return insertHost(s.db, h, string(cmds), string(chain), now)
+		return insertHost(s.db, h, string(cmds), string(script), string(chain), now)
 	}
 	h.UpdatedAt = time.Unix(now, 0)
 	res, err := s.db.Exec(`UPDATE hosts SET group_id=?, name=?, addr=?, port=?, username=?,
-		auth_type=?, key_path=?, init_commands=?, proxy_chain=?, keepalive_sec=?, auto_reconnect=?,
+		auth_type=?, key_path=?, init_commands=?, login_script=?, proxy_chain=?, keepalive_sec=?, auto_reconnect=?,
 		last_connected_at=?, sort=?, updated_at=? WHERE id=?`,
 		h.GroupID, h.Name, h.Addr, h.Port, h.Username, string(h.AuthType),
-		h.KeyPath, string(cmds), string(chain), h.KeepaliveSec, boolInt(h.AutoReconnect),
+		h.KeyPath, string(cmds), string(script), string(chain), h.KeepaliveSec, boolInt(h.AutoReconnect),
 		h.LastConnectedAt.Unix(), h.Sort, now, h.ID)
 	if err != nil {
 		return err
@@ -294,16 +319,16 @@ func (s *sqliteStore) SaveHost(h *Host) error {
 	// 非空 ID 但记录不存在（service 层为新主机预生成 ID 的场景）：按新建处理
 	if n, _ := res.RowsAffected(); n == 0 {
 		h.CreatedAt = time.Unix(now, 0)
-		return insertHost(s.db, h, string(cmds), string(chain), now)
+		return insertHost(s.db, h, string(cmds), string(script), string(chain), now)
 	}
 	return nil
 }
 
-func insertHost(db *sql.DB, h *Host, cmds, chain string, now int64) error {
+func insertHost(db *sql.DB, h *Host, cmds, script, chain string, now int64) error {
 	_, err := db.Exec(`INSERT INTO hosts (`+hostColumns+`)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		h.ID, h.GroupID, h.Name, h.Addr, h.Port, h.Username, string(h.AuthType),
-		h.KeyPath, cmds, chain, h.KeepaliveSec, boolInt(h.AutoReconnect),
+		h.KeyPath, cmds, script, chain, h.KeepaliveSec, boolInt(h.AutoReconnect),
 		h.LastConnectedAt.Unix(), h.Sort, now, now)
 	return err
 }

@@ -62,8 +62,11 @@
 - ✅ FinalShell 导入（conn/*_connect_config.json，仅非敏感字段）
 - ✅ SSH agent 认证（Unix SSH_AUTH_SOCK / Windows OpenSSH agent 命名管道）
 - ✅ 跳板链 ProxyJump（最多 3 跳，逐跳 TOFU 校验，环检测）
-- 待办：rz/sz、分屏、expect 式登录脚本、SFTP 暂停恢复/限速（断点续传已随 M3 实现）、
-  双面板 + 终端 cwd 联动、远程编辑、en-US 文案
+- ✅ SFTP 暂停/恢复 + 全局限速
+- ✅ 远程编辑（下载 → 系统编辑器 → 保存自动回传，冲突检测）
+- ✅ en-US 英文界面 + 语言切换
+- ✅ expect 式登录脚本（正则匹配输出并自动应答）
+- 待办：rz/sz（ZMODEM）、分屏、双面板 + 终端 cwd 联动
 
 ## v0.3 —— 数据库与 Redis
 

@@ -186,6 +186,11 @@ export default {
     proxyChain: '跳板链',
     proxyChainTip: '按顺序选择跳板主机（最多 3 跳）',
     proxyChainHelp: '留空表示直连；选择多台时按所选顺序逐跳建立隧道，每跳使用各自的凭据',
+    loginScript: '登录脚本（交互式认证）',
+    loginExpect: '匹配正则，如 Permission denied',
+    loginSend: '匹配后发送的内容',
+    loginScriptTip:
+      '按顺序匹配终端输出（正则），命中后自动发送对应内容；用于二次认证、交互式提示等场景',
     initCommands: '初始命令',
     initCommandsTip: '登录成功后按顺序执行；回车添加，点标签移除',
     requiredTip: '名称与主机地址为必填项',

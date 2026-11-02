@@ -10,14 +10,16 @@ Currently pre-release, under active development.
 
 | 模块 | 状态 |
 | --- | --- |
-| SSH 终端（多标签、TOFU、keepalive、自动重连、会话日志、命令片段） | ✅ v0.1 |
+| SSH 终端（多标签、TOFU、keepalive、自动重连、会话日志、命令片段、**登录脚本**） | ✅ v0.2 |
 | 连接管理（分组树、搜索、克隆、**跳板链**、**SSH Agent**） | ✅ v0.2 |
 | 迁移导入（**Xshell** 与 **FinalShell** 批量导入） | ✅ v0.2 |
-| SFTP 文件传输（并发队列、**断点续传**、覆盖策略、递归、拖拽上传） | ✅ v0.1 |
+| SFTP 文件传输（并发队列、**断点续传**、暂停/限速、**远程编辑**、拖拽上传） | ✅ v0.2 |
 | 系统监控（`/proc` 采集、GPU 探测、实时曲线） | ✅ v0.2 |
 | MySQL + Redis 管理 | 📅 v0.3 |
 | K3s/K8s 面板（经 SSH 自动发现） | 📅 v0.4 |
 | AI 运维 | 💡 v0.5+ |
+
+界面支持 **简体中文 / English** 切换（侧栏 ⚙）。
 
 完整路线与验收标准见 [ROADMAP.md](ROADMAP.md)，架构设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 

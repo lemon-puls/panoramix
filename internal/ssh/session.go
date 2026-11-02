@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -38,16 +39,18 @@ const (
 // ConnectConfig 一次连接的完整参数。Password/Passphrase 由 app 层从
 // keychain 解出传入，仅在内存存活，严禁写日志。
 type ConnectConfig struct {
-	HostID        string
-	Name          string
-	Addr          string
-	Port          int
-	Username      string
-	AuthType      string // password | key | keyboard_interactive | agent
-	KeyPath       string
-	Password      string
-	Passphrase    string
-	InitCommands  []string
+	HostID       string
+	Name         string
+	Addr         string
+	Port         int
+	Username     string
+	AuthType     string // password | key | keyboard_interactive | agent
+	KeyPath      string
+	Password     string
+	Passphrase   string
+	InitCommands []string
+	// LoginScript expect 式交互认证步骤：PTY 输出匹配 Expect（正则）时发送 Send
+	LoginScript   []LoginStep
 	KeepaliveSec  int    // 0 视为默认 30
 	AutoReconnect bool   // 断线自动重连（最多 5 次，间隔 3s）
 	SessionLog    bool   // 会话日志（按天落文件）
@@ -62,6 +65,12 @@ type ConnectConfig struct {
 
 func (c *ConnectConfig) hostPort() string {
 	return net.JoinHostPort(c.Addr, strconv.Itoa(c.Port))
+}
+
+// LoginStep expect 式登录脚本的一步
+type LoginStep struct {
+	Expect string
+	Send   string
 }
 
 // clientConfigFor 构造某跳连接的 SSH 客户端配置（含主机密钥校验与认证）
@@ -80,7 +89,7 @@ func (s *Session) clientConfigFor(cfg *ConnectConfig) (*gossh.ClientConfig, erro
 
 // Session 一个活跃的 SSH 终端会话（一个 PTY）
 type Session struct {
-	id string
+	id  string
 	cfg ConnectConfig
 	em  Emitter
 	mgr *Manager
@@ -95,6 +104,12 @@ type Session struct {
 	logFile *os.File
 
 	batcher *outputBatcher
+
+	// expect 式登录脚本运行态
+	loginMu   sync.Mutex
+	loginIdx  int
+	loginBuf  []byte // 最近输出（跨分块匹配用）
+	loginDone bool
 }
 
 // newID 生成 96bit 随机 hex 会话 ID
@@ -262,6 +277,13 @@ func (s *Session) connectOnce() error {
 		closeHops(hops)
 		return fmt.Errorf("start shell: %w", err)
 	}
+
+	// 重置 expect 登录脚本运行态（重连时重新执行脚本）
+	s.loginMu.Lock()
+	s.loginIdx = 0
+	s.loginBuf = nil
+	s.loginDone = len(s.cfg.LoginScript) == 0
+	s.loginMu.Unlock()
 
 	s.mu.Lock()
 	s.client = client
@@ -506,6 +528,46 @@ func (s *Session) openLog() {
 	s.mu.Unlock()
 	_, _ = f.WriteString(fmt.Sprintf("===== session %s opened %s =====\n",
 		s.id, time.Now().Format(time.RFC3339)))
+}
+
+// tryLoginScript expect 式登录脚本：累积最近输出（跨分块匹配），
+// 命中当前步骤的正则即发送对应内容并推进到下一步。
+func (s *Session) tryLoginScript(data []byte) {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	if s.loginDone || len(s.cfg.LoginScript) == 0 {
+		return
+	}
+	// 累积最近 8KB（模式可能跨输出分块）
+	s.loginBuf = append(s.loginBuf, data...)
+	if len(s.loginBuf) > 8*1024 {
+		s.loginBuf = s.loginBuf[len(s.loginBuf)-8*1024:]
+	}
+	for s.loginIdx < len(s.cfg.LoginScript) {
+		step := s.cfg.LoginScript[s.loginIdx]
+		re, err := regexp.Compile(step.Expect)
+		if err != nil {
+			log.Printf("[ssh] login script: invalid regex %q: %v", step.Expect, err)
+			s.loginDone = true
+			return
+		}
+		loc := re.FindIndex(s.loginBuf)
+		if loc == nil {
+			return // 等待更多输出
+		}
+		// 消费已匹配部分，避免下一步重复匹配同一段
+		s.loginBuf = s.loginBuf[loc[1]:]
+		s.loginIdx++
+		s.mu.Lock()
+		stdin := s.stdin
+		s.mu.Unlock()
+		if stdin != nil {
+			_, _ = stdin.Write([]byte(step.Send + "\n"))
+			log.Printf("[ssh] login script step %d sent", s.loginIdx)
+		}
+	}
+	s.loginDone = true
+	log.Printf("[ssh] login script completed")
 }
 
 func (s *Session) writeLog(data []byte) {

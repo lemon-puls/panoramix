@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import {
   NButton,
+  NDynamicInput,
   NDynamicTags,
   NForm,
   NFormItem,
@@ -40,6 +41,7 @@ const form = reactive({
   authType: 'password' as string,
   keyPath: '',
   proxyChain: [] as string[],
+  loginScript: [] as models.store.LoginStep[],
   password: '',
   passphrase: '',
   keepaliveSec: 30,
@@ -59,6 +61,7 @@ watch(
     form.authType = h?.authType ?? 'password'
     form.keyPath = h?.keyPath ?? ''
     form.proxyChain = [...(h?.proxyChain ?? [])]
+    form.loginScript = [...(h?.loginScript ?? [])]
     form.password = '' // 凭据字段永不回填
     form.passphrase = ''
     form.keepaliveSec = h?.keepaliveSec ?? 30
@@ -103,6 +106,7 @@ async function save() {
       authType: form.authType,
       keyPath: form.keyPath.trim(),
       proxyChain: [...form.proxyChain],
+      loginScript: form.loginScript.filter((st) => st.expect.trim() !== ''),
       initCommands: [...form.initCommands],
       keepaliveSec: form.keepaliveSec > 0 ? form.keepaliveSec : 30,
       autoReconnect: form.autoReconnect,
@@ -187,6 +191,28 @@ async function save() {
         />
       </n-form-item>
       <p class="tip">{{ t('hostForm.proxyChainHelp') }}</p>
+      <n-form-item :label="t('hostForm.loginScript')">
+        <n-dynamic-input
+          v-model:value="form.loginScript"
+          :on-create="() => ({ expect: '', send: '' })"
+          class="script-editor"
+        >
+          <template #default="{ value }">
+            <n-input
+              v-model:value="value.expect"
+              size="small"
+              :placeholder="t('hostForm.loginExpect')"
+            />
+            <span class="arrow">→</span>
+            <n-input
+              v-model:value="value.send"
+              size="small"
+              :placeholder="t('hostForm.loginSend')"
+            />
+          </template>
+        </n-dynamic-input>
+      </n-form-item>
+      <p class="tip">{{ t('hostForm.loginScriptTip') }}</p>
       <n-form-item :label="t('hostForm.initCommands')">
         <n-dynamic-tags v-model:value="form.initCommands" />
       </n-form-item>
@@ -208,6 +234,14 @@ async function save() {
 .port-input {
   width: 110px;
   margin-left: 8px;
+}
+.script-editor :deep(.n-dynamic-input-item) {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.arrow {
+  opacity: 0.5;
 }
 .tip {
   margin: -8px 0 0 112px;

@@ -190,6 +190,11 @@ export default {
     proxyChainTip: 'Select jump hosts in order (max 3 hops)',
     proxyChainHelp:
       'Empty = direct connection. Multiple hosts are chained in the selected order, each using its own credentials.',
+    loginScript: 'Login Script (interactive auth)',
+    loginExpect: 'Regex to match, e.g. Password:',
+    loginSend: 'Text to send on match',
+    loginScriptTip:
+      'Steps run in order: when terminal output matches the regex, the text is sent automatically. Useful for secondary auth prompts.',
     initCommands: 'Init Commands',
     initCommandsTip: 'Run in order after login. Press Enter to add, click a tag to remove.',
     requiredTip: 'Name and address are required',
