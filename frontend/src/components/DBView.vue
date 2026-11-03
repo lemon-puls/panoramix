@@ -1089,6 +1089,7 @@ void load()
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
   padding: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 .sidebar-head {
   display: flex;
@@ -1264,6 +1265,7 @@ void load()
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
   overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
 }
 .placeholder {
   margin: auto;

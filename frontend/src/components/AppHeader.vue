@@ -148,7 +148,7 @@ async function onSpeedLimitChange(v: number | null) {
   gap: var(--gap);
   height: 52px;
   padding: 0 20px;
-  background: var(--bg-app);
+  background: linear-gradient(180deg, #171d26 0%, #12161c 100%);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   -webkit-app-region: drag;
