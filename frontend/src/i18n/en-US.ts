@@ -109,6 +109,8 @@ export default {
     clickSort: 'Click header to sort, click a cell to copy',
     copied: 'Copied',
     history: 'History',
+    flatMode: 'Flat view',
+    treeMode: 'Tree view',
   },
   settings: {
     sessionLog: 'Session log (daily files)',

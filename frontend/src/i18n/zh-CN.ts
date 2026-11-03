@@ -108,6 +108,8 @@ export default {
     clickSort: '点击表头排序，点击单元格复制',
     copied: '已复制',
     history: '查询历史',
+    flatMode: '平铺显示',
+    treeMode: '树形显示',
   },
   settings: {
     sessionLog: '会话日志（按天落文件）',

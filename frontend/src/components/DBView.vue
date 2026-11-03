@@ -316,6 +316,93 @@ async function loadRedisMore(reset = false) {
 
 const hasMoreKeys = computed(() => redisCursor.value !== 0)
 
+// ---------- Redis 键树（按 ":" 分层，HeidiSQL/Another-Redis-Desktop 风格） ----------
+
+interface KeyNode {
+  name: string // 该层显示名
+  fullKey: string // 仅叶子有完整键名
+  isLeaf: boolean
+  type: string
+  ttl: number
+  children: KeyNode[]
+}
+
+const treeMode = ref(true)
+const collapsedNodes = ref<Set<string>>(new Set())
+
+function buildKeyTree(keys: models.db.KeyInfo[]): KeyNode[] {
+  const root: KeyNode = { name: '', fullKey: '', isLeaf: false, type: '', ttl: 0, children: [] }
+  const index = new Map<string, KeyNode>([['', root]])
+  for (const k of keys) {
+    const parts = k.key.split(':')
+    let path = ''
+    let parent = root
+    for (let i = 0; i < parts.length; i++) {
+      path = path ? `${path}:${parts[i]}` : parts[i]
+      const isLeaf = i === parts.length - 1
+      let node = index.get(path)
+      if (!node) {
+        node = {
+          name: parts[i],
+          fullKey: isLeaf ? k.key : '',
+          isLeaf,
+          type: isLeaf ? k.type : '',
+          ttl: isLeaf ? k.ttl : 0,
+          children: [],
+        }
+        index.set(path, node)
+        parent.children.push(node)
+      } else if (isLeaf) {
+        // 同时存在 "a" 与 "a:b"：把 "a" 标记为叶子
+        node.isLeaf = true
+        node.fullKey = k.key
+        node.type = k.type
+        node.ttl = k.ttl
+      }
+      parent = node
+    }
+  }
+  const sortNodes = (nodes: KeyNode[]) => {
+    nodes.sort((a, b) => {
+      if (a.children.length !== b.children.length) return b.children.length - a.children.length
+      return a.name.localeCompare(b.name)
+    })
+    nodes.forEach((n) => sortNodes(n.children))
+  }
+  sortNodes(root.children)
+  return root.children
+}
+
+const keyTree = computed(() => buildKeyTree(redisKeys.value))
+
+function toggleNode(node: KeyNode) {
+  const next = new Set(collapsedNodes.value)
+  const path = node.fullKey || node.name
+  if (next.has(path)) next.delete(path)
+  else next.add(path)
+  collapsedNodes.value = next
+}
+
+function isCollapsed(node: KeyNode): boolean {
+  return collapsedNodes.value.has(node.fullKey || node.name)
+}
+
+// 扁平化（预计算缩进），避免递归组件
+const flatTree = computed(() => {
+  const out: { node: KeyNode; depth: number; path: string }[] = []
+  const walk = (nodes: KeyNode[], depth: number, prefix: string) => {
+    for (const n of nodes) {
+      const path = prefix ? `${prefix}:${n.name}` : n.name
+      out.push({ node: n, depth, path })
+      if (n.children.length > 0 && !collapsedNodes.value.has(path)) {
+        walk(n.children, depth + 1, path)
+      }
+    }
+  }
+  walk(keyTree.value, 0, '')
+  return out
+})
+
 async function selectKey(k: models.db.KeyInfo) {
   if (!active.value) return
   redisSelected.value = k.key
@@ -478,17 +565,45 @@ void load()
               />
               <n-button size="tiny" @click="loadRedisFirstPage">{{ t('db.scan') }}</n-button>
             </div>
-            <div
-              v-for="k in redisKeys"
-              :key="k.key"
-              class="key-item"
-              :class="{ active: k.key === redisSelected }"
-              @click="selectKey(k)"
-            >
-              <span class="key-type" :style="{ color: typeColors[k.type] ?? '#888' }">{{ k.type }}</span>
-              <span class="key-name" :title="k.key">{{ k.key }}</span>
-              <span class="key-ttl">{{ fmtTTL(k.ttl) }}</span>
+            <div class="redis-mode">
+              <span class="mode-link" @click="treeMode = !treeMode">
+                {{ treeMode ? t('db.flatMode') : t('db.treeMode') }}
+              </span>
             </div>
+            <template v-if="treeMode">
+              <div
+                v-for="it in flatTree"
+                :key="it.path"
+                class="key-item"
+                :class="{ active: it.node.fullKey && it.node.fullKey === redisSelected }"
+                :style="{ paddingLeft: 5 + it.depth * 12 + 'px' }"
+                :title="it.node.fullKey || it.path"
+                @click="it.node.isLeaf ? selectKey({ key: it.node.fullKey, type: it.node.type, ttl: it.node.ttl }) : toggleNode(it.node)"
+              >
+                <span v-if="it.node.children.length" class="twist">
+                  {{ collapsedNodes.has(it.path) ? '▸' : '▾' }}
+                </span>
+                <span v-else class="twist" />
+                <span class="key-type" :style="{ color: typeColors[it.node.type] ?? (it.node.isLeaf ? '#888' : '#63e2b7') }">
+                  {{ it.node.isLeaf ? it.node.type : '▾' }}
+                </span>
+                <span class="key-name">{{ it.node.name }}</span>
+                <span v-if="it.node.isLeaf" class="key-ttl">{{ fmtTTL(it.node.ttl) }}</span>
+              </div>
+            </template>
+            <template v-else>
+              <div
+                v-for="k in redisKeys"
+                :key="k.key"
+                class="key-item"
+                :class="{ active: k.key === redisSelected }"
+                @click="selectKey(k)"
+              >
+                <span class="key-type" :style="{ color: typeColors[k.type] ?? '#888' }">{{ k.type }}</span>
+                <span class="key-name" :title="k.key">{{ k.key }}</span>
+                <span class="key-ttl">{{ fmtTTL(k.ttl) }}</span>
+              </div>
+            </template>
             <div v-if="redisKeys.length === 0" class="tree-empty">{{ t('db.noKeys') }}</div>
             <n-button
               v-if="hasMoreKeys"
@@ -843,6 +958,24 @@ void load()
 }
 .more-btn {
   width: 100%;
+}
+.redis-mode {
+  padding: 2px 6px 2px 12px;
+}
+.mode-link {
+  font-size: 10px;
+  color: #63e2b7;
+  cursor: pointer;
+  opacity: 0.8;
+}
+.mode-link:hover {
+  opacity: 1;
+}
+.key-item .twist {
+  width: 10px;
+  flex-shrink: 0;
+  font-size: 9px;
+  opacity: 0.6;
 }
 .key-type {
   font-size: 9px;

@@ -64,10 +64,15 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   ListGroups: async () => [],
   ListHosts: async () => [],
   ListSnippets: async () => [],
-  ListDBConns: async () => [
-    { id: 'mysql-1', name: '本地 MySQL', kind: 'mysql', addr: '127.0.0.1', port: 3306, username: 'root', dbName: 'demo', hasSecret: true, sort: 0 },
-    { id: 'redis-1', name: '本地 Redis', kind: 'redis', addr: '127.0.0.1', port: 6379, username: '', dbName: '0', hasSecret: true, sort: 1 },
-  ],
+  ListDBConns: async () => (new URLSearchParams(location.search).get('redis') === '1'
+    ? [
+        { id: 'redis-1', name: '本地 Redis', kind: 'redis', addr: '127.0.0.1', port: 6379, username: '', dbName: '0', hasSecret: true, sort: 0 },
+        { id: 'mysql-1', name: '本地 MySQL', kind: 'mysql', addr: '127.0.0.1', port: 3306, username: 'root', dbName: 'demo', hasSecret: true, sort: 1 },
+      ]
+    : [
+        { id: 'mysql-1', name: '本地 MySQL', kind: 'mysql', addr: '127.0.0.1', port: 3306, username: 'root', dbName: 'demo', hasSecret: true, sort: 0 },
+        { id: 'redis-1', name: '本地 Redis', kind: 'redis', addr: '127.0.0.1', port: 6379, username: '', dbName: '0', hasSecret: true, sort: 1 },
+      ]),
   DBListDatabases: async () => ['demo', 'information_schema', 'mysql'],
   DBListTables: async () => [
     { name: 'users', isView: false, rows: 1280, comment: '用户表' },
@@ -81,7 +86,15 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   ],
   DBShowCreateTable: async () => 'CREATE TABLE `users` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(64) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;',
   DBQuery: async () => ({ columns: ['id', 'name', 'created_at'], rows: [['1', 'alice', '2026-01-01 10:00:00'], ['2', null, '2026-01-02 11:30:00']], affected: 0, durationMs: 3, truncated: false }),
-  RedisScanKeys: async () => ({ keys: [{ key: 'user:1', ttl: 120, type: 'string' }, { key: 'user:2', ttl: -1, type: 'hash' }], cursor: 0 }),
+  RedisScanKeys: async () => ({ keys: [
+    { key: 'user:1:name', ttl: 120, type: 'string' },
+    { key: 'user:1:email', ttl: 120, type: 'string' },
+    { key: 'user:2:name', ttl: -1, type: 'string' },
+    { key: 'session:abc', ttl: 3600, type: 'hash' },
+    { key: 'session:def', ttl: 3600, type: 'hash' },
+    { key: 'queue:jobs', ttl: -1, type: 'list' },
+    { key: 'stats:visits', ttl: -1, type: 'string' },
+  ], cursor: 0 }),
   RedisGetValue: async () => ({ key: 'user:1', type: 'string', ttl: 120, str: 'alice', total: 1, truncated: false }),
   RedisSetTTL: async () => undefined,
   RedisDeleteKey: async () => undefined,
