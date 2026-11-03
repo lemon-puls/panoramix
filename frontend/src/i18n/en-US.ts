@@ -121,12 +121,14 @@ export default {
     sortServerSide: 'Click to sort by this column (server ORDER BY)',
     colsView: 'Columns',
     queryTitle: 'Query',
+    runHint: 'Press Ctrl + Enter or click Run',
 
     flatMode: 'Flat view',
     treeMode: 'Tree view',
     zeroRows: 'Query succeeded but returned no rows',
   },
   settings: {
+    title: 'Settings',
     sessionLog: 'Session log (daily files)',
     cwdSync: 'Directory sync (bash, applies on reconnect)',
     language: 'Language',

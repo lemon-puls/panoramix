@@ -120,12 +120,14 @@ export default {
     sortServerSide: '点击按此列排序（服务端 ORDER BY）',
     colsView: '列视图',
     queryTitle: '查询',
+    runHint: '按 Ctrl + Enter 或点击「执行」',
 
     flatMode: '平铺显示',
     treeMode: '树形显示',
     zeroRows: '查询执行成功，但没有返回数据（0 行）',
   },
   settings: {
+    title: '设置',
     sessionLog: '会话日志（按天落文件）',
     cwdSync: '目录同步（bash，需重连生效）',
   },

@@ -619,9 +619,9 @@ function fmtTTL(ttl: number): string {
 }
 
 const typeColors: Record<string, string> = {
-  string: '#63e2b7',
+  string: 'var(--accent)',
   hash: '#4a9ffd',
-  list: '#f0a020',
+  list: 'var(--warning)',
   set: '#722ed1',
   zset: '#d4380d',
   stream: '#888',
@@ -733,7 +733,7 @@ void load()
                   {{ collapsedNodes.has(it.path) ? '▸' : '▾' }}
                 </span>
                 <span v-else class="twist" />
-                <span class="key-type" :style="{ color: typeColors[it.node.type] ?? (it.node.isLeaf ? '#888' : '#63e2b7') }">
+                <span class="key-type" :style="{ color: typeColors[it.node.type] ?? (it.node.isLeaf ? '#888' : 'var(--accent)') }">
                   {{ it.node.isLeaf ? it.node.type : '▾' }}
                 </span>
                 <span class="key-name">{{ it.node.name }}</span>
@@ -868,7 +868,10 @@ void load()
                 </table>
               </div>
             </template>
-            <div v-else class="result-empty">{{ activeTab.loading ? t('db.loadingData') : t('db.noData') }}</div>
+            <div v-else class="result-empty">
+              <div class="empty-glyph">{{ activeTab.loading ? '◌' : '▤' }}</div>
+              <div>{{ activeTab.loading ? t('db.loadingData') : t('db.noData') }}</div>
+            </div>
           </div>
         </template>
 
@@ -896,7 +899,11 @@ void load()
 
           <div class="result">
             <div v-if="activeTab.error" class="query-error">{{ activeTab.error }}</div>
-            <div v-else-if="!activeTab.result" class="result-empty">{{ t('db.noResult') }}</div>
+            <div v-else-if="!activeTab.result" class="result-empty">
+              <div class="empty-glyph">⌘</div>
+              <div>{{ t('db.noResult') }}</div>
+              <div class="empty-hint">{{ t('db.runHint') }}</div>
+            </div>
             <template v-else-if="(activeTab.result.columns?.length ?? 0) > 0">
               <div class="result-meta">
                 {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
@@ -1073,20 +1080,24 @@ void load()
 }
 /* ---------- 左侧栏 ---------- */
 .sidebar {
-  width: 250px;
+  width: 264px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
-  padding-right: 8px;
+  gap: var(--gap-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  padding: 10px;
 }
 .sidebar-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 12px;
-  opacity: 0.75;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 .tree-scroll {
   flex: 1;
@@ -1102,29 +1113,32 @@ void load()
 .key-item {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 5px;
-  border-radius: 4px;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
+  color: var(--text-secondary);
   white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .conn-item:hover,
 .db-item:hover,
 .table-item:hover,
 .key-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .conn-item.active,
 .table-item.active,
 .key-item.active {
-  background: rgba(99, 226, 183, 0.12);
+  background: var(--accent-soft);
 }
 .twist {
   width: 10px;
   flex-shrink: 0;
   font-size: 9px;
-  opacity: 0.6;
+  color: var(--text-muted);
 }
 .kind {
   width: 15px;
@@ -1164,7 +1178,7 @@ void load()
   opacity: 1;
 }
 .op.danger {
-  color: #e88080;
+  color: var(--danger);
 }
 .db-block {
   padding-left: 12px;
@@ -1174,7 +1188,7 @@ void load()
 }
 .db-count {
   font-size: 10px;
-  opacity: 0.4;
+  color: var(--text-muted);
 }
 .table-list {
   padding-left: 16px;
@@ -1186,13 +1200,13 @@ void load()
 }
 .table-rows {
   font-size: 10px;
-  opacity: 0.35;
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 .tree-empty {
   font-size: 11px;
-  opacity: 0.4;
-  padding: 4px 8px;
+  color: var(--text-muted);
+  padding: 6px 10px;
 }
 .redis-filter {
   display: flex;
@@ -1207,7 +1221,7 @@ void load()
 }
 .mode-link {
   font-size: 10px;
-  color: #63e2b7;
+  color: var(--accent);
   cursor: pointer;
   opacity: 0.8;
 }
@@ -1218,7 +1232,7 @@ void load()
   width: 10px;
   flex-shrink: 0;
   font-size: 9px;
-  opacity: 0.6;
+  color: var(--text-muted);
 }
 .key-type {
   font-size: 9px;
@@ -1233,8 +1247,8 @@ void load()
   margin: 8px 0;
   padding: 8px 10px;
   border-radius: 6px;
-  background: rgba(232, 128, 128, 0.12);
-  color: #e88080;
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--danger);
   font-size: 11px;
   white-space: pre-wrap;
 }
@@ -1245,42 +1259,58 @@ void load()
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
 .placeholder {
   margin: auto;
-  opacity: 0.4;
+  color: var(--text-muted);
   font-size: 13px;
 }
 .tab-bar {
   display: flex;
   align-items: center;
-  gap: 2px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  padding-bottom: 4px;
+  gap: 4px;
+  padding: 6px 6px 0;
+  background: var(--bg-app);
+  border-bottom: 1px solid var(--border-subtle);
   overflow-x: auto;
   flex-shrink: 0;
 }
 .tab {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
-  border-radius: 4px 4px 0 0;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 6px 6px 0 0;
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
-  opacity: 0.7;
+  color: var(--text-secondary);
   max-width: 200px;
+  position: relative;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .tab:hover {
-  background: rgba(255, 255, 255, 0.06);
-  opacity: 1;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .tab.active {
-  background: rgba(99, 226, 183, 0.12);
-  opacity: 1;
-  color: #63e2b7;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+.tab.active::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
 }
 .tab-icon {
   font-size: 9px;
@@ -1297,7 +1327,7 @@ void load()
 }
 .tab-close:hover {
   opacity: 1;
-  color: #e88080;
+  color: var(--danger);
 }
 .tab-add {
   padding: 0 8px;
@@ -1307,7 +1337,7 @@ void load()
 }
 .tab-add:hover {
   opacity: 1;
-  color: #63e2b7;
+  color: var(--accent);
 }
 .filter-input {
   flex: 1;
@@ -1315,19 +1345,22 @@ void load()
 }
 .page-num {
   font-size: 12px;
-  opacity: 0.7;
+  color: var(--text-secondary);
   min-width: 52px;
   text-align: center;
 }
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--gap-sm);
   flex-shrink: 0;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .ctx {
   font-size: 12px;
-  opacity: 0.75;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1341,7 +1374,7 @@ void load()
   height: 130px;
   resize: vertical;
   background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border);
   border-radius: 6px;
   color: #d4d4d4;
   font-family: Consolas, 'Courier New', monospace;
@@ -1351,30 +1384,44 @@ void load()
   outline: none;
 }
 .sql-editor:focus {
-  border-color: rgba(99, 226, 183, 0.4);
+  border-color: rgba(94, 234, 212, 0.45);
 }
 .result {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 6px;
+  background: var(--bg-panel);
   overflow: hidden;
 }
 .query-error {
   margin: 12px;
   padding: 10px 12px;
   border-radius: 6px;
-  background: rgba(232, 128, 128, 0.12);
-  color: #e88080;
+  background: rgba(248, 113, 113, 0.1);
+  color: var(--danger);
   font-size: 12px;
   white-space: pre-wrap;
 }
 .result-empty {
   margin: auto;
-  opacity: 0.4;
+  color: var(--text-muted);
   font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+.empty-glyph {
+  font-size: 30px;
+  opacity: 0.35;
+  line-height: 1;
+}
+.empty-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.8;
 }
 .result-meta {
   display: flex;
@@ -1383,18 +1430,18 @@ void load()
   padding: 6px 10px;
   font-size: 11px;
   opacity: 0.65;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--bg-hover);
   flex-shrink: 0;
 }
 .warn {
-  color: #f0a020;
+  color: var(--warning);
 }
 .hint {
   font-size: 10px;
-  opacity: 0.5;
+  color: var(--text-muted);
 }
 .link {
-  color: #63e2b7;
+  color: var(--accent);
   cursor: pointer;
 }
 .grid-wrap {
@@ -1408,21 +1455,29 @@ void load()
 }
 .grid th,
 .grid td {
-  padding: 3px 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
   text-align: left;
   white-space: nowrap;
   max-width: 360px;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.5;
 }
 .grid th {
   position: sticky;
   top: 0;
-  background: #202028;
-  color: rgba(255, 255, 255, 0.7);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
   font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   z-index: 1;
+  border-bottom: 1px solid var(--border);
+}
+.grid tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.015);
 }
 .grid th.sortable {
   cursor: pointer;
@@ -1433,7 +1488,7 @@ void load()
 }
 .sort {
   font-size: 8px;
-  color: #63e2b7;
+  color: var(--accent);
 }
 .grid tbody tr:hover {
   background: rgba(255, 255, 255, 0.04);
@@ -1442,15 +1497,15 @@ void load()
   cursor: pointer;
 }
 .grid td.selected {
-  background: rgba(99, 226, 183, 0.18);
+  background: rgba(94, 234, 212, 0.22);
 }
 .rownum {
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--text-muted);
   text-align: right;
   width: 40px;
 }
 .grid td.null {
-  color: rgba(255, 255, 255, 0.3);
+  color: var(--text-muted);
   font-style: italic;
 }
 .mono {
@@ -1469,12 +1524,12 @@ void load()
 }
 .history {
   flex-shrink: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--border-subtle);
   padding-top: 4px;
 }
 .history-head {
   font-size: 10px;
-  opacity: 0.5;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-bottom: 2px;
@@ -1487,8 +1542,8 @@ void load()
 }
 .history-item {
   font-size: 11px;
-  font-family: Consolas, monospace;
-  opacity: 0.6;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
   padding: 1px 4px;
   border-radius: 3px;
   cursor: pointer;
@@ -1497,15 +1552,15 @@ void load()
   white-space: nowrap;
 }
 .history-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-  opacity: 1;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 /* ---------- Redis 值 ---------- */
 .value {
   flex: 1;
   min-height: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   padding: 8px;
   overflow: auto;
@@ -1523,7 +1578,7 @@ void load()
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--border-subtle);
 }
 .value-key {
   font-weight: 600;
@@ -1538,7 +1593,7 @@ void load()
 }
 .warn-line {
   font-size: 11px;
-  color: #f0a020;
+  color: var(--warning);
 }
 .str-value {
   position: relative;
@@ -1562,7 +1617,7 @@ void load()
   width: 100%;
   height: 220px;
   background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border);
   border-radius: 4px;
   color: #d4d4d4;
   font-family: Consolas, monospace;
