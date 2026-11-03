@@ -315,7 +315,6 @@ export namespace db {
 
 }
 
-
 export namespace fsx {
 	
 	export class Entry {

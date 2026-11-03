@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onErrorCaptured, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   darkTheme,
@@ -30,6 +30,14 @@ import MonitorPanel from './components/MonitorPanel.vue'
 
 // 模块级 ref 需在 setup 内引用才会在模板中解包
 const view = mainView
+
+// 子组件渲染异常时把错误显示出来（否则整块区域静默空白，难以排查）
+const renderError = ref('')
+onErrorCaptured((err) => {
+  renderError.value = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  console.error('[app] render error captured', err)
+  return false
+})
 
 const { t } = useI18n()
 const terminals = useTerminalsStore()
@@ -72,7 +80,8 @@ onMounted(async () => {
           <n-layout-content content-style="padding: 12px; height: 100%">
             <div class="content-row">
               <div class="term-area">
-                <DBView v-if="view === 'db'" class="db-area" />
+                <div v-if="renderError" class="render-error">{{ renderError }}</div>
+                <DBView v-else-if="view === 'db'" class="db-area" />
                 <TerminalTabs v-else-if="terminals.tabs.length > 0" />
                 <div v-else class="hero">
                   <h1 class="brand">Panoramix</h1>
@@ -115,6 +124,15 @@ onMounted(async () => {
 }
 .db-area {
   height: 100%;
+}
+.render-error {
+  margin: 20px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(232, 128, 128, 0.12);
+  color: #e88080;
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 .files-area {
   width: 380px;

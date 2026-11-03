@@ -4,7 +4,6 @@ import {app} from '../models';
 import {db} from '../models';
 import {store} from '../models';
 import {sftp} from '../models';
-import {db} from '../models';
 import {fsx} from '../models';
 
 export function CloseSession(arg1:string):Promise<void>;

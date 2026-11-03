@@ -31,21 +31,20 @@ const editing = ref<models.store.DBConn | null>(null)
 const active = computed(() => conns.value.find((c) => c.id === activeId.value) ?? null)
 const isRedis = computed(() => active.value?.kind === 'redis')
 
-async function load() {
-  conns.value = (await ListDBConns()) ?? []
-  if (!activeId.value && conns.value.length > 0) activeId.value = conns.value[0].id
-}
-void load()
+const loadError = ref('')
 
-watch(activeId, () => {
-  result.value = null
-  redisKeys.value = []
-  redisCursor.value = 0
-  redisValue.value = null
-  redisSelected.value = ''
-  sqlText.value = ''
-  if (active.value) void loadRedisFirstPage()
-})
+async function load() {
+  try {
+    conns.value = (await ListDBConns()) ?? []
+    if (!activeId.value && conns.value.length > 0) activeId.value = conns.value[0].id
+  } catch (e) {
+    // 桥接缺失（如后端未重启）时把原因显示出来，而不是静默空白
+    loadError.value = String(e)
+    console.error('[db] load connections failed', e)
+  }
+}
+
+
 
 function openNew() {
   editing.value = null
@@ -212,6 +211,19 @@ function fmtTTL(ttl: number): string {
   return `${Math.floor(ttl / 3600)}h`
 }
 
+// 会话切换时清空工作区状态（放在所有 ref 定义之后，避免 TDZ）
+watch(activeId, () => {
+  result.value = null
+  redisKeys.value = []
+  redisCursor.value = 0
+  redisValue.value = null
+  redisSelected.value = ''
+  sqlText.value = ''
+  if (active.value) void loadRedisFirstPage()
+})
+
+void load()
+
 const typeColors: Record<string, string> = {
   string: '#63e2b7',
   hash: '#4a9ffd',
@@ -252,7 +264,8 @@ const typeColors: Record<string, string> = {
 
     <!-- 右：工作区 -->
     <div class="workspace">
-      <div v-if="!active" class="placeholder">{{ t('db.pickConn') }}</div>
+      <div v-if="loadError" class="load-error">{{ loadError }}</div>
+      <div v-else-if="!active" class="placeholder">{{ t('db.pickConn') }}</div>
 
       <!-- MySQL -->
       <template v-else-if="!isRedis">
@@ -501,6 +514,15 @@ const typeColors: Record<string, string> = {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.load-error {
+  margin: 20px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(232, 128, 128, 0.12);
+  color: #e88080;
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 .placeholder {
   margin: auto;
