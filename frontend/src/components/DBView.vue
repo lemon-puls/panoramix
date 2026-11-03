@@ -100,12 +100,7 @@ const currentDb = ref('')
 const treeLoading = ref(false)
 
 // 当前选中的表（右侧显示结构或数据）
-const selectedTable = ref('')
-const tableColumns = ref<models.db.ColumnInfo[]>([])
-const tableDDL = ref('')
-const showDDL = ref(false)
-// 结果区显示模式：执行查询 → result；单击表 → structure；查看 DDL → ddl
-const viewMode = ref<'result' | 'structure' | 'ddl'>('result')
+
 
 async function toggleConn() {
   if (!active.value || isRedis.value) return
@@ -143,50 +138,270 @@ async function toggleDb(db: string) {
   expandedDbs.value = next
 }
 
-async function selectTable(db: string, table: models.db.TableInfo) {
-  if (!active.value) return
-  currentDb.value = db
-  selectedTable.value = table.name
-  showDDL.value = false
-  viewMode.value = 'structure'
+// 单击表 → 打开结构标签（已存在则激活）
+async function openTableStructure(db: string, table: models.db.TableInfo) {
+  const id = activeId.value
+  const exist = tabs.value.find(
+    (x) => x.kind === 'structure' && x.connId === id && x.database === db && x.table === table.name,
+  )
+  if (exist) {
+    activeTabId.value = exist.id
+    return
+  }
+  const tab = newTab('structure', {
+    title: `${table.name} · ${t('db.structureShort')}`,
+    database: db,
+    table: table.name,
+  })
+  tabs.value.push(tab)
+  activeTabId.value = tab.id
   try {
-    tableColumns.value = (await DBDescribeTable(active.value.id, db, table.name)) ?? []
+    tab.columns = (await DBDescribeTable(id, db, table.name)) ?? []
   } catch (e) {
-    message.error(String(e))
+    tab.error = String(e)
   }
 }
 
-// 双击表：生成 SELECT 并执行
+// 双击表 → 打开数据标签（默认 1000 条）
 async function openTableData(db: string, table: models.db.TableInfo) {
-  currentDb.value = db
-  selectedTable.value = table.name
-  showDDL.value = false
-  viewMode.value = 'result'
-  sqlText.value = `SELECT * FROM \`${db}\`.\`${table.name}\` LIMIT 200;`
-  await runQuery()
+  const id = activeId.value
+  const exist = tabs.value.find(
+    (x) => x.kind === 'data' && x.connId === id && x.database === db && x.table === table.name,
+  )
+  if (exist) {
+    activeTabId.value = exist.id
+    await loadTableData(exist, true)
+    return
+  }
+  const tab = newTab('data', { title: table.name, database: db, table: table.name })
+  tabs.value.push(tab)
+  activeTabId.value = tab.id
+  await loadTableData(tab, true)
 }
 
-async function loadDDL() {
-  if (!active.value || !selectedTable.value) return
+// ---------- 工作标签（HeidiSQL 风格：数据 / 查询 / 结构） ----------
+
+type TabKind = 'query' | 'data' | 'structure'
+
+interface WorkTab {
+  id: string
+  kind: TabKind
+  title: string
+  connId: string
+  database: string
+  table: string
+  sql: string
+  filter: string
+  page: number
+  pageSize: number
+  sortCol: string
+  sortDir: 1 | -1
+  result: models.db.Result | null
+  error: string
+  loading: boolean
+  columns: models.db.ColumnInfo[]
+  ddl: string
+  showDDL: boolean
+  gridSortCol: number
+  gridSortDir: 1 | -1
+  selectedRow: number
+  selectedCol: number
+}
+
+let tabSeq = 0
+const tabs = ref<WorkTab[]>([])
+const activeTabId = ref('')
+const activeTab = computed(() => tabs.value.find((x) => x.id === activeTabId.value) ?? null)
+
+function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
+  return {
+    id: `tab-${++tabSeq}`,
+    kind,
+    title: '',
+    connId: activeId.value,
+    database: '',
+    table: '',
+    sql: 'SELECT 1',
+    filter: '',
+    page: 0,
+    pageSize: 1000,
+    sortCol: '',
+    sortDir: 1,
+    result: null,
+    error: '',
+    loading: false,
+    columns: [],
+    ddl: '',
+    showDDL: false,
+    gridSortCol: -1,
+    gridSortDir: 1,
+    selectedRow: -1,
+    selectedCol: -1,
+    ...init,
+  }
+}
+
+function openQuery() {
+  const n = tabs.value.filter((x) => x.kind === 'query').length + 1
+  const tab = newTab('query', { title: t('db.queryN', { n }) })
+  tabs.value.push(tab)
+  activeTabId.value = tab.id
+}
+
+function closeTab(id: string) {
+  const idx = tabs.value.findIndex((x) => x.id === id)
+  if (idx === -1) return
+  tabs.value.splice(idx, 1)
+  if (activeTabId.value === id) activeTabId.value = tabs.value.at(-1)?.id ?? ''
+}
+
+// 数据标签 SQL 生成（用户筛选条件原样拼入 WHERE，与 HeidiSQL 一致）
+function buildTableSQL(tab: WorkTab): string {
+  const parts = [`SELECT * FROM \`${tab.database}\`.\`${tab.table}\``]
+  const filter = tab.filter.trim()
+  if (filter) parts.push(`WHERE ${filter}`)
+  if (tab.sortCol) parts.push(`ORDER BY \`${tab.sortCol}\` ${tab.sortDir === 1 ? 'ASC' : 'DESC'}`)
+  parts.push(`LIMIT ${tab.pageSize} OFFSET ${tab.page * tab.pageSize}`)
+  return parts.join(' ')
+}
+
+async function loadTableData(tab: WorkTab, resetPage = false) {
+  if (resetPage) tab.page = 0
+  tab.loading = true
+  tab.error = ''
   try {
-    tableDDL.value = await DBShowCreateTable(active.value.id, currentDb.value, selectedTable.value)
-    showDDL.value = true
-    viewMode.value = 'ddl'
+    tab.result = await DBQuery(tab.connId, buildTableSQL(tab), tab.pageSize)
+    tab.gridSortCol = -1
+    tab.selectedRow = -1
+    tab.selectedCol = -1
+  } catch (e) {
+    tab.error = String(e)
+    tab.result = null
+  } finally {
+    tab.loading = false
+  }
+}
+
+function sortTableByColumn(tab: WorkTab, colName: string) {
+  if (tab.sortCol === colName) tab.sortDir = tab.sortDir === 1 ? -1 : 1
+  else {
+    tab.sortCol = colName
+    tab.sortDir = 1
+  }
+  void loadTableData(tab, true)
+}
+
+function hasNextPage(tab: WorkTab): boolean {
+  return (tab.result?.rows?.length ?? 0) >= tab.pageSize
+}
+
+function nextPage(tab: WorkTab) {
+  tab.page++
+  void loadTableData(tab)
+}
+
+function prevPage(tab: WorkTab) {
+  if (tab.page === 0) return
+  tab.page--
+  void loadTableData(tab)
+}
+
+function gotoStructure(tab: WorkTab) {
+  const info = tablesByDb[tab.database]?.find((x) => x.name === tab.table)
+  if (info) void openTableStructure(tab.database, info)
+}
+
+// 查询执行
+async function runQueryTab(tab: WorkTab) {
+  const text = tab.sql.trim()
+  if (!text) return
+  tab.loading = true
+  tab.error = ''
+  try {
+    tab.result = await DBQuery(tab.connId, text, 1000)
+    tab.gridSortCol = -1
+    tab.selectedRow = -1
+    tab.selectedCol = -1
+    pushHistory(text)
+    if ((tab.result.columns?.length ?? 0) > 0 && (tab.result.rows?.length ?? 0) === 0) {
+      message.info(t('db.zeroRows'))
+    }
+  } catch (e) {
+    tab.error = String(e)
+    tab.result = null
+    message.error(String(e))
+  } finally {
+    tab.loading = false
+  }
+}
+
+// 结果网格
+function sortedRows(tab: WorkTab) {
+  const rows = tab.result?.rows ?? []
+  if (tab.gridSortCol < 0) return rows
+  const col = tab.gridSortCol
+  const dir = tab.gridSortDir
+  return [...rows].sort((a, b) => {
+    const av = a[col]
+    const bv = b[col]
+    if (av === null && bv === null) return 0
+    if (av === null) return 1
+    if (bv === null) return -1
+    const na = Number(av)
+    const nb = Number(bv)
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) return (na - nb) * dir
+    return av.localeCompare(bv) * dir
+  })
+}
+
+function toggleGridSort(tab: WorkTab, col: number) {
+  if (tab.gridSortCol === col) tab.gridSortDir = tab.gridSortDir === 1 ? -1 : 1
+  else {
+    tab.gridSortCol = col
+    tab.gridSortDir = 1
+  }
+}
+
+function copyCell(tab: WorkTab, row: number, col: number) {
+  tab.selectedRow = row
+  tab.selectedCol = col
+  const v = sortedRows(tab)[row]?.[col]
+  if (v == null) return
+  navigator.clipboard?.writeText(v).then(
+    () => message.success(t('db.copied')),
+    () => {
+      /* 忽略 */
+    },
+  )
+}
+
+function exportCSV(tab: WorkTab) {
+  if (!tab.result?.columns?.length) return
+  const esc = (v: string | null) => {
+    if (v == null) return ''
+    return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+  }
+  const lines = [tab.result.columns.map(esc).join(',')]
+  for (const row of sortedRows(tab)) lines.push(row.map(esc).join(','))
+  const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${tab.table || 'query'}_${Date.now()}.csv`
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+async function loadDDL(tab: WorkTab) {
+  try {
+    tab.ddl = await DBShowCreateTable(tab.connId, tab.database, tab.table)
+    tab.showDDL = true
   } catch (e) {
     message.error(String(e))
   }
 }
 
-// ---------- SQL 工作台 ----------
-
-const sqlText = ref('SELECT 1')
-const result = ref<models.db.Result | null>(null)
-const queryError = ref('')
-const running = ref(false)
-const sortState = reactive({ col: -1, dir: 1 as 1 | -1 })
-const selectedCell = reactive({ row: -1, col: -1 })
-
-// 查询历史（localStorage，最多 50 条）
+// 查询历史
 const HISTORY_KEY = 'panoramix.sqlHistory'
 const history = ref<string[]>([])
 function loadHistory() {
@@ -206,94 +421,6 @@ function pushHistory(sql: string) {
   } catch {
     /* 忽略 */
   }
-}
-
-async function runQuery() {
-  if (!active.value) {
-    message.warning(t('db.pickConn'))
-    return
-  }
-  const text = sqlText.value.trim()
-  if (!text) return
-  running.value = true
-  viewMode.value = 'result'
-  queryError.value = ''
-  try {
-    result.value = await DBQuery(active.value.id, text, 1000)
-    sortState.col = -1
-    selectedCell.row = -1
-    selectedCell.col = -1
-    pushHistory(text)
-    if (
-      (!result.value.rows || result.value.rows.length === 0) &&
-      (result.value.columns?.length ?? 0) > 0
-    ) {
-      message.info(t('db.zeroRows'))
-    }
-  } catch (e) {
-    queryError.value = String(e)
-    message.error(String(e))
-    result.value = null
-  } finally {
-    running.value = false
-  }
-}
-
-// 本地排序（不改 SQL）
-const sortedRows = computed(() => {
-  const rows = result.value?.rows ?? []
-  const { col, dir } = sortState
-  if (col < 0) return rows
-  return [...rows].sort((a, b) => {
-    const av = a[col]
-    const bv = b[col]
-    if (av === null && bv === null) return 0
-    if (av === null) return 1
-    if (bv === null) return -1
-    const na = Number(av)
-    const nb = Number(bv)
-    if (!Number.isNaN(na) && !Number.isNaN(nb)) return (na - nb) * dir
-    return av.localeCompare(bv) * dir
-  })
-})
-
-function toggleSort(col: number) {
-  if (sortState.col === col) sortState.dir = sortState.dir === 1 ? -1 : 1
-  else {
-    sortState.col = col
-    sortState.dir = 1
-  }
-}
-
-function copyCell(row: number, col: number) {
-  const v = sortedRows.value[row]?.[col]
-  selectedCell.row = row
-  selectedCell.col = col
-  if (v == null) return
-  navigator.clipboard?.writeText(v).then(
-    () => message.success(t('db.copied')),
-    () => {
-      /* 忽略 */
-    },
-  )
-}
-
-// 导出 CSV（当前结果集，应用当前排序）
-function exportCSV() {
-  if (!result.value?.columns?.length) return
-  const esc = (v: string | null) => {
-    if (v == null) return ''
-    return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
-  }
-  const lines = [result.value.columns.map(esc).join(',')]
-  for (const row of sortedRows.value) lines.push(row.map(esc).join(','))
-  const blob = new Blob([`﻿${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${selectedTable.value || 'query'}_${Date.now()}.csv`
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 // ---------- Redis ----------
@@ -499,19 +626,16 @@ watch(activeId, () => {
   databases.value = []
   Object.keys(tablesByDb).forEach((k) => delete tablesByDb[k])
   expandedDbs.value = new Set()
-  currentDb.value = ''
-  selectedTable.value = ''
-  tableColumns.value = []
-  tableDDL.value = ''
-  showDDL.value = false
-  viewMode.value = 'result'
-  result.value = null
+  tabs.value = []
+  activeTabId.value = ''
   redisKeys.value = []
   redisCursor.value = 0
   redisValue.value = null
   redisSelected.value = ''
-  sqlText.value = 'SELECT 1'
-  if (active.value && isRedis.value) void loadRedisFirstPage()
+  if (active.value) {
+    if (isRedis.value) void loadRedisFirstPage()
+    else openQuery()
+  }
 })
 
 void load()
@@ -548,7 +672,7 @@ void load()
           <!-- MySQL：库 → 表 -->
           <template v-if="c.id === activeId && !isRedis">
             <div v-for="db in databases" :key="db" class="db-block">
-              <div class="db-item" :class="{ active: currentDb === db && !selectedTable }" @click="toggleDb(db)">
+              <div class="db-item" @click="toggleDb(db)">
                 <span class="twist">{{ expandedDbs.has(db) ? '▾' : '▸' }}</span>
                 <span class="db-name">{{ db }}</span>
                 <span v-if="tablesByDb[db]" class="db-count">{{ tablesByDb[db].length }}</span>
@@ -558,9 +682,8 @@ void load()
                   v-for="tb in tablesByDb[db] ?? []"
                   :key="tb.name"
                   class="table-item"
-                  :class="{ active: selectedTable === tb.name && currentDb === db }"
                   :title="`${tb.name}${tb.comment ? ' — ' + tb.comment : ''}`"
-                  @click="selectTable(db, tb)"
+                  @click="openTableStructure(db, tb)"
                   @dblclick="openTableData(db, tb)"
                 >
                   <span class="table-icon">{{ tb.isView ? '◇' : '▤' }}</span>
@@ -645,132 +768,225 @@ void load()
 
       <!-- MySQL 工作台 -->
       <template v-else-if="!isRedis">
-        <div class="toolbar">
-          <span class="ctx">{{ active.name }}{{ currentDb ? ` · ${currentDb}` : '' }}{{ selectedTable ? ` · ${selectedTable}` : '' }}</span>
-          <span class="spacer" />
-          <n-button size="small" :loading="running" type="primary" @click="runQuery">
-            {{ t('db.run') }}
-          </n-button>
-          <n-button size="small" :disabled="!result?.columns?.length" @click="exportCSV">
-            {{ t('db.exportCsv') }}
-          </n-button>
+        <!-- 标签栏 -->
+        <div class="tab-bar">
+          <div
+            v-for="tab in tabs"
+            :key="tab.id"
+            class="tab"
+            :class="{ active: tab.id === activeTabId }"
+            @click="activeTabId = tab.id"
+          >
+            <span class="tab-icon">{{ tab.kind === 'query' ? '▶' : tab.kind === 'data' ? '▤' : '◇' }}</span>
+            <span class="tab-title">{{ tab.title }}</span>
+            <span class="tab-close" @click.stop="closeTab(tab.id)">×</span>
+          </div>
+          <div class="tab-add" :title="t('db.newQueryTab')" @click="openQuery">＋</div>
         </div>
 
-        <textarea
-          v-model="sqlText"
-          class="sql-editor"
-          spellcheck="false"
-          :placeholder="t('db.sqlPlaceholder')"
-          @keydown.ctrl.enter.prevent="runQuery"
-          @keydown.meta.enter.prevent="runQuery"
-        />
+        <div v-if="!activeTab" class="placeholder">{{ t('db.noTab') }}</div>
 
-        <!-- 表结构视图（单击表时） -->
-        <div v-if="viewMode === 'structure' && selectedTable" class="result">
-          <div class="result-meta">
-            {{ t('db.tableStructure', { table: selectedTable }) }}
+        <!-- 数据浏览标签 -->
+        <template v-else-if="activeTab.kind === 'data'">
+          <div class="toolbar">
+            <n-input
+              v-model:value="activeTab.filter"
+              size="small"
+              :placeholder="t('db.filterPlaceholder')"
+              class="filter-input"
+              @keyup.enter="loadTableData(activeTab, true)"
+            />
+            <n-button size="small" :loading="activeTab.loading" @click="loadTableData(activeTab, true)">
+              {{ t('db.refresh') }}
+            </n-button>
+            <n-button size="small" @click="gotoStructure(activeTab)">{{ t('db.structureShort') }}</n-button>
             <span class="spacer" />
-            <a class="link" @click="loadDDL">{{ t('db.showDDL') }}</a>
+            <n-button size="small" :disabled="activeTab.page === 0" @click="prevPage(activeTab)">‹</n-button>
+            <span class="page-num">{{ t('db.pageN', { n: activeTab.page + 1 }) }}</span>
+            <n-button size="small" :disabled="!hasNextPage(activeTab)" @click="nextPage(activeTab)">›</n-button>
+            <n-select
+              v-model:value="activeTab.pageSize"
+              size="small"
+              :options="[100, 500, 1000, 5000].map((n) => ({ label: String(n), value: n }))"
+              style="width: 90px"
+              @update:value="loadTableData(activeTab, true)"
+            />
+            <n-button size="small" :disabled="!(activeTab.result?.columns?.length)" @click="exportCSV(activeTab)">
+              CSV
+            </n-button>
           </div>
-          <div class="grid-wrap">
-            <table class="grid">
-              <thead>
-                <tr>
-                  <th>{{ t('db.colField') }}</th>
-                  <th>{{ t('db.colType') }}</th>
-                  <th>{{ t('db.colNull') }}</th>
-                  <th>{{ t('db.colKey') }}</th>
-                  <th>{{ t('db.colDefault') }}</th>
-                  <th>{{ t('db.colExtra') }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="c in tableColumns" :key="c.field">
-                  <td class="mono">{{ c.field }}</td>
-                  <td class="mono">{{ c.type }}</td>
-                  <td>{{ c.null }}</td>
-                  <td>{{ c.key }}</td>
-                  <td class="mono">{{ c.default ?? 'NULL' }}</td>
-                  <td>{{ c.extra }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
 
-        <!-- DDL -->
-        <div v-else-if="viewMode === 'ddl'" class="result">
-          <div class="result-meta">
-            {{ t('db.ddlTitle') }}
+          <div class="result">
+            <div v-if="activeTab.error" class="query-error">{{ activeTab.error }}</div>
+            <template v-else-if="activeTab.result && (activeTab.result.columns?.length ?? 0) > 0">
+              <div class="result-meta">
+                {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
+                <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
+                <span class="spacer" />
+                <span class="hint">{{ t('db.clickSort') }}</span>
+              </div>
+              <div class="grid-wrap">
+                <table class="grid">
+                  <thead>
+                    <tr>
+                      <th class="rownum">#</th>
+                      <th
+                        v-for="c in activeTab.result.columns"
+                        :key="c"
+                        class="sortable"
+                        :title="t('db.sortServerSide')"
+                        @click="sortTableByColumn(activeTab, c)"
+                      >
+                        {{ c }}
+                        <span v-if="activeTab.sortCol === c" class="sort">{{ activeTab.sortDir === 1 ? '▲' : '▼' }}</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, ri) in sortedRows(activeTab)" :key="ri">
+                      <td class="rownum">{{ ri + 1 + activeTab.page * activeTab.pageSize }}</td>
+                      <td
+                        v-for="(cell, ci) in row"
+                        :key="ci"
+                        :class="{
+                          null: cell === null,
+                          selected: activeTab.selectedRow === ri && activeTab.selectedCol === ci,
+                        }"
+                        @click="copyCell(activeTab, ri, ci)"
+                      >
+                        {{ cell === null ? 'NULL' : cell }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+            <div v-else class="result-empty">{{ activeTab.loading ? t('db.loadingData') : t('db.noData') }}</div>
+          </div>
+        </template>
+
+        <!-- 查询标签 -->
+        <template v-else-if="activeTab.kind === 'query'">
+          <div class="toolbar">
+            <span class="ctx">{{ t('db.queryTitle') }}</span>
             <span class="spacer" />
-            <a class="link" @click="viewMode = result ? 'result' : 'structure'">{{ t('db.backToResult') }}</a>
+            <n-button size="small" type="primary" :loading="activeTab.loading" @click="runQueryTab(activeTab)">
+              {{ t('db.run') }}
+            </n-button>
+            <n-button size="small" :disabled="!(activeTab.result?.columns?.length)" @click="exportCSV(activeTab)">
+              CSV
+            </n-button>
           </div>
-          <pre class="ddl">{{ tableDDL }}</pre>
-        </div>
 
-        <!-- 查询结果 -->
-        <div v-else class="result">
-          <div v-if="queryError" class="query-error">{{ queryError }}</div>
-          <div v-else-if="!result" class="result-empty">{{ t('db.noResult') }}</div>
-          <template v-else-if="result.columns && result.columns.length > 0">
-            <div class="result-meta">
-              {{ result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ result.durationMs }}ms
-              <span v-if="result.truncated" class="warn">· {{ t('db.truncated') }}</span>
-              <span class="spacer" />
-              <span class="hint">{{ t('db.clickSort') }}</span>
+          <textarea
+            v-model="activeTab.sql"
+            class="sql-editor"
+            spellcheck="false"
+            :placeholder="t('db.sqlPlaceholder')"
+            @keydown.ctrl.enter.prevent="runQueryTab(activeTab)"
+            @keydown.meta.enter.prevent="runQueryTab(activeTab)"
+          />
+
+          <div class="result">
+            <div v-if="activeTab.error" class="query-error">{{ activeTab.error }}</div>
+            <div v-else-if="!activeTab.result" class="result-empty">{{ t('db.noResult') }}</div>
+            <template v-else-if="(activeTab.result.columns?.length ?? 0) > 0">
+              <div class="result-meta">
+                {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
+                <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
+                <span class="spacer" />
+                <span class="hint">{{ t('db.clickSort') }}</span>
+              </div>
+              <div class="grid-wrap">
+                <table class="grid">
+                  <thead>
+                    <tr>
+                      <th class="rownum">#</th>
+                      <th v-for="(c, ci) in activeTab.result.columns" :key="c" class="sortable" @click="toggleGridSort(activeTab, ci)">
+                        {{ c }}
+                        <span v-if="activeTab.gridSortCol === ci" class="sort">{{ activeTab.gridSortDir === 1 ? '▲' : '▼' }}</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, ri) in sortedRows(activeTab)" :key="ri">
+                      <td class="rownum">{{ ri + 1 }}</td>
+                      <td
+                        v-for="(cell, ci) in row"
+                        :key="ci"
+                        :class="{
+                          null: cell === null,
+                          selected: activeTab.selectedRow === ri && activeTab.selectedCol === ci,
+                        }"
+                        @click="copyCell(activeTab, ri, ci)"
+                      >
+                        {{ cell === null ? 'NULL' : cell }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+            <div v-else class="result-meta">
+              {{ t('db.affected', { n: activeTab.result.affected }) }} · {{ activeTab.result.durationMs }}ms
             </div>
-            <div class="grid-wrap">
+          </div>
+
+          <div v-if="history.length" class="history">
+            <div class="history-head">{{ t('db.history') }}</div>
+            <div class="history-list">
+              <div
+                v-for="(h, i) in history.slice(0, 6)"
+                :key="i"
+                class="history-item"
+                :title="h"
+                @click="activeTab.sql = h"
+              >
+                {{ h }}
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <!-- 结构标签 -->
+        <template v-else>
+          <div class="toolbar">
+            <span class="ctx">{{ activeTab.database }} · {{ activeTab.table }}</span>
+            <span class="spacer" />
+            <n-button size="small" @click="loadDDL(activeTab)">{{ t('db.showDDL') }}</n-button>
+            <n-button size="small" :disabled="!activeTab.showDDL" @click="activeTab.showDDL = false">
+              {{ t('db.colsView') }}
+            </n-button>
+          </div>
+          <div class="result">
+            <div v-if="activeTab.error" class="query-error">{{ activeTab.error }}</div>
+            <pre v-else-if="activeTab.showDDL" class="ddl">{{ activeTab.ddl }}</pre>
+            <div v-else class="grid-wrap">
               <table class="grid">
                 <thead>
                   <tr>
-                    <th class="rownum">#</th>
-                    <th
-                      v-for="(c, ci) in result.columns"
-                      :key="c"
-                      class="sortable"
-                      @click="toggleSort(ci)"
-                    >
-                      {{ c }}
-                      <span v-if="sortState.col === ci" class="sort">{{ sortState.dir === 1 ? '▲' : '▼' }}</span>
-                    </th>
+                    <th>{{ t('db.colField') }}</th>
+                    <th>{{ t('db.colType') }}</th>
+                    <th>{{ t('db.colNull') }}</th>
+                    <th>{{ t('db.colKey') }}</th>
+                    <th>{{ t('db.colDefault') }}</th>
+                    <th>{{ t('db.colExtra') }}</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(row, ri) in sortedRows" :key="ri">
-                    <td class="rownum">{{ ri + 1 }}</td>
-                    <td
-                      v-for="(cell, ci) in row"
-                      :key="ci"
-                      :class="{ null: cell === null, selected: selectedCell.row === ri && selectedCell.col === ci }"
-                      @click="copyCell(ri, ci)"
-                    >
-                      {{ cell === null ? 'NULL' : cell }}
-                    </td>
+                  <tr v-for="col in activeTab.columns" :key="col.field">
+                    <td class="mono">{{ col.field }}</td>
+                    <td class="mono">{{ col.type }}</td>
+                    <td>{{ col.null }}</td>
+                    <td>{{ col.key }}</td>
+                    <td class="mono">{{ col.default ?? 'NULL' }}</td>
+                    <td>{{ col.extra }}</td>
                   </tr>
                 </tbody>
               </table>
             </div>
-          </template>
-          <div v-else class="result-meta">
-            {{ t('db.affected', { n: result.affected }) }} · {{ result.durationMs }}ms
           </div>
-        </div>
-
-        <!-- 查询历史 -->
-        <div v-if="history.length" class="history">
-          <div class="history-head">{{ t('db.history') }}</div>
-          <div class="history-list">
-            <div
-              v-for="(h, i) in history.slice(0, 8)"
-              :key="i"
-              class="history-item"
-              :title="h"
-              @click="sqlText = h"
-            >
-              {{ h }}
-            </div>
-          </div>
-        </div>
+        </template>
       </template>
 
       <!-- Redis 值查看器 -->
@@ -1029,10 +1245,78 @@ void load()
   opacity: 0.4;
   font-size: 13px;
 }
+.tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 4px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 4px 4px 0 0;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  opacity: 0.7;
+  max-width: 200px;
+}
+.tab:hover {
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 1;
+}
+.tab.active {
+  background: rgba(99, 226, 183, 0.12);
+  opacity: 1;
+  color: #63e2b7;
+}
+.tab-icon {
+  font-size: 9px;
+  opacity: 0.7;
+}
+.tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab-close {
+  opacity: 0.4;
+  font-size: 13px;
+  line-height: 1;
+}
+.tab-close:hover {
+  opacity: 1;
+  color: #e88080;
+}
+.tab-add {
+  padding: 0 8px;
+  font-size: 14px;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.tab-add:hover {
+  opacity: 1;
+  color: #63e2b7;
+}
+.filter-input {
+  flex: 1;
+  min-width: 160px;
+}
+.page-num {
+  font-size: 12px;
+  opacity: 0.7;
+  min-width: 52px;
+  text-align: center;
+}
 .toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 .ctx {
   font-size: 12px;
