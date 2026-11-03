@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, h, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
 import { NButton, NInput, NInputNumber } from 'naive-ui'
@@ -24,6 +24,8 @@ import {
 } from '../../wailsjs/go/app/Service'
 import * as models from '../../wailsjs/go/models'
 import DBConnModal from './DBConnModal.vue'
+import ColumnModal from './ColumnModal.vue'
+import IndexModal from './IndexModal.vue'
 
 // 数据库视图（HeidiSQL 风格）：
 // 左：连接 → 库 → 表 树；右：SQL 工作台（编辑器 + 结果/结构）或 Redis 值查看器
@@ -458,6 +460,139 @@ function pushHistory(sql: string) {
   } catch {
     /* 忽略 */
   }
+}
+
+// ---------- 表结构编辑（生成 ALTER 并预览确认） ----------
+
+const colModal = reactive({
+  show: false,
+  mode: 'add' as 'add' | 'edit',
+  column: null as models.db.ColumnInfo | null,
+})
+const idxModal = reactive({ show: false, kind: 'index' as 'index' | 'foreignKey' })
+
+function quoteIdent(n: string): string {
+  return '`' + n.replace(/`/g, '``') + '`'
+}
+
+function alterPrefix(tab: WorkTab): string {
+  return `ALTER TABLE ${quoteIdent(tab.database)}.${quoteIdent(tab.table)}`
+}
+
+function buildColumnSQL(
+  tab: WorkTab,
+  mode: 'add' | 'edit',
+  p: { name: string; type: string; nullable: boolean; defaultValue: string; comment: string; autoIncrement: boolean },
+  original: models.db.ColumnInfo | null,
+): string {
+  const parts = [`${quoteIdent(p.name)} ${p.type}`, p.nullable ? 'NULL' : 'NOT NULL']
+  const dv = p.defaultValue
+  if (dv !== '') {
+    const isExpr =
+      /^(CURRENT_TIMESTAMP(\(\))?|NULL|NOW\(\))$/i.test(dv) || /^-?\d+(\.\d+)?$/.test(dv)
+    parts.push(`DEFAULT ${isExpr ? dv : `'${dv.replace(/'/g, "''")}'`}`)
+  }
+  if (p.autoIncrement) parts.push('AUTO_INCREMENT')
+  if (p.comment) parts.push(`COMMENT '${p.comment.replace(/'/g, "''")}'`)
+  const def = parts.join(' ')
+  if (mode === 'add') return `${alterPrefix(tab)} ADD COLUMN ${def};`
+  if (original && original.field !== p.name) {
+    return `${alterPrefix(tab)} CHANGE COLUMN ${quoteIdent(original.field)} ${def};`
+  }
+  return `${alterPrefix(tab)} MODIFY COLUMN ${def};`
+}
+
+// 执行 DDL：先预览确认，再执行并刷新结构
+function runDDL(tab: WorkTab, sql: string) {
+  dialog.warning({
+    title: t('db.confirmDDL'),
+    content: () => h('pre', { class: 'ddl-preview' }, sql),
+    positiveText: t('db.executeDDL'),
+    negativeText: t('common.cancel'),
+    onPositiveClick: async () => {
+      tab.loading = true
+      try {
+        await DBQuery(tab.connId, sql, 1)
+        message.success(t('db.ddlDone'))
+        await loadTableStructure(tab)
+        // 数据标签与表列表也可能受影响，刷新表列表计数
+        if (active.value) {
+          const list = await DBListTables(active.value.id, tab.database).catch(() => null)
+          if (list) tablesByDb[tab.database] = list
+        }
+      } catch (e) {
+        message.error(String(e))
+      } finally {
+        tab.loading = false
+      }
+    },
+  })
+}
+
+function submitColumn(payload: { name: string; type: string; nullable: boolean; defaultValue: string; comment: string; autoIncrement: boolean }) {
+  const tab = activeTab.value
+  if (!tab) return
+  const sql = buildColumnSQL(tab, colModal.mode, payload, colModal.column)
+  runDDL(tab, sql)
+}
+
+function openAddColumn() {
+  colModal.mode = 'add'
+  colModal.column = null
+  colModal.show = true
+}
+
+function openEditColumn(col: models.db.ColumnInfo) {
+  colModal.mode = 'edit'
+  colModal.column = col
+  colModal.show = true
+}
+
+function openAddIndex(kind: 'index' | 'foreignKey') {
+  idxModal.kind = kind
+  idxModal.show = true
+}
+
+// 当前表的同库表列表（外键引用候选）
+const currentDbTables = computed(() => {
+  const db = activeTab.value?.database ?? ''
+  return (tablesByDb[db] ?? []).map((x) => x.name)
+})
+
+function dropColumn(col: models.db.ColumnInfo) {
+  const tab = activeTab.value
+  if (!tab) return
+  runDDL(tab, `${alterPrefix(tab)} DROP COLUMN ${quoteIdent(col.field)};`)
+}
+
+function submitIndex(payload: { name: string; columns: string[]; unique?: boolean; refTable?: string; refColumns?: string; onUpdate?: string; onDelete?: string }) {
+  const tab = activeTab.value
+  if (!tab) return
+  const cols = payload.columns.map(quoteIdent).join(', ')
+  let sql: string
+  if (idxModal.kind === 'index') {
+    const kind = payload.unique ? 'UNIQUE INDEX' : 'INDEX'
+    sql = `${alterPrefix(tab)} ADD ${kind} ${quoteIdent(payload.name)} (${cols});`
+  } else {
+    const refCols = (payload.refColumns ?? '')
+      .split(',')
+      .map((x) => quoteIdent(x.trim()))
+      .join(', ')
+    sql = `${alterPrefix(tab)} ADD CONSTRAINT ${quoteIdent(payload.name)} FOREIGN KEY (${cols}) REFERENCES ${quoteIdent(payload.refTable ?? '')} (${refCols}) ON UPDATE ${payload.onUpdate} ON DELETE ${payload.onDelete};`
+  }
+  runDDL(tab, sql)
+}
+
+function dropIndex(idx: models.db.IndexInfo) {
+  const tab = activeTab.value
+  if (!tab) return
+  runDDL(tab, `${alterPrefix(tab)} DROP INDEX ${quoteIdent(idx.name)};`)
+}
+
+function dropForeignKey(fk: models.db.ForeignKeyInfo) {
+  const tab = activeTab.value
+  if (!tab) return
+  runDDL(tab, `${alterPrefix(tab)} DROP FOREIGN KEY ${quoteIdent(fk.name)};`)
 }
 
 // ---------- Redis ----------
@@ -1084,7 +1219,10 @@ void load()
                 </div>
               </div>
 
-              <div class="section-label">{{ t('db.columnsSection', { n: activeTab.columns.length }) }}</div>
+              <div class="section-label">
+                {{ t('db.columnsSection', { n: activeTab.columns.length }) }}
+                <a class="link add-link" @click="openAddColumn">＋ {{ t('db.addColumn') }}</a>
+              </div>
               <div class="grid-wrap">
                 <table class="grid">
                   <thead>
@@ -1096,6 +1234,7 @@ void load()
                       <th>{{ t('db.colKey') }}</th>
                       <th>{{ t('db.colDefault') }}</th>
                       <th>{{ t('db.colExtra') }}</th>
+                      <th class="ops-col">{{ t('db.actions') }}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1107,6 +1246,10 @@ void load()
                       <td>{{ col.key }}</td>
                       <td class="mono">{{ col.default ?? 'NULL' }}</td>
                       <td>{{ col.extra }}</td>
+                      <td class="ops-col">
+                        <button class="row-op" :title="t('menu.edit')" @click="openEditColumn(col)">✎</button>
+                        <button class="row-op danger" :title="t('common.delete')" @click="dropColumn(col)">×</button>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -1115,6 +1258,10 @@ void load()
 
             <!-- 索引 -->
             <div v-else-if="activeTab.structView === 'indexes'" class="struct-body">
+              <div class="section-label">
+                {{ t('db.tabIndexes') }}
+                <a class="link add-link" @click="openAddIndex('index')">＋ {{ t('db.addIndex') }}</a>
+              </div>
               <div v-if="activeTab.indexes.length === 0" class="result-empty">
                 <div class="empty-glyph">◈</div>
                 <div>{{ t('db.noIndexes') }}</div>
@@ -1127,6 +1274,7 @@ void load()
                       <th>{{ t('db.idxType') }}</th>
                       <th>{{ t('db.idxUnique') }}</th>
                       <th>{{ t('db.idxColumns') }}</th>
+                      <th class="ops-col">{{ t('db.actions') }}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1139,6 +1287,14 @@ void load()
                         </span>
                       </td>
                       <td class="mono">{{ idx.columns.join(', ') }}</td>
+                      <td class="ops-col">
+                        <button
+                          v-if="idx.name !== 'PRIMARY'"
+                          class="row-op danger"
+                          :title="t('common.delete')"
+                          @click="dropIndex(idx)"
+                        >×</button>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -1147,6 +1303,10 @@ void load()
 
             <!-- 外键 -->
             <div v-else-if="activeTab.structView === 'fks'" class="struct-body">
+              <div class="section-label">
+                {{ t('db.tabForeignKeys') }}
+                <a class="link add-link" @click="openAddIndex('foreignKey')">＋ {{ t('db.addForeignKey') }}</a>
+              </div>
               <div v-if="activeTab.foreignKeys.length === 0" class="result-empty">
                 <div class="empty-glyph">⇄</div>
                 <div>{{ t('db.noForeignKeys') }}</div>
@@ -1161,6 +1321,7 @@ void load()
                       <th>{{ t('db.fkRefColumn') }}</th>
                       <th>{{ t('db.fkOnUpdate') }}</th>
                       <th>{{ t('db.fkOnDelete') }}</th>
+                      <th class="ops-col">{{ t('db.actions') }}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1171,6 +1332,9 @@ void load()
                       <td class="mono">{{ fk.refColumn }}</td>
                       <td>{{ fk.onUpdate || '—' }}</td>
                       <td>{{ fk.onDelete || '—' }}</td>
+                      <td class="ops-col">
+                        <button class="row-op danger" :title="t('common.delete')" @click="dropForeignKey(fk)">×</button>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -1185,6 +1349,20 @@ void load()
     </div>
 
     <DBConnModal v-model:show="modal" :conn="editing" @saved="onSaved" />
+    <ColumnModal
+      v-model:show="colModal.show"
+      :mode="colModal.mode"
+      :column="colModal.column"
+      @submit="submitColumn"
+    />
+    <IndexModal
+      v-model:show="idxModal.show"
+      :kind="idxModal.kind"
+      :columns="activeTab?.columns.map((c) => c.field) ?? []"
+      :table="activeTab?.table ?? ''"
+      :tables="currentDbTables"
+      @submit="submitIndex"
+    />
   </div>
 </template>
 
@@ -1606,6 +1784,35 @@ void load()
   font-size: 10px;
   background: var(--bg-app);
   color: var(--text-muted);
+}
+.add-link {
+  margin-left: 12px;
+  font-size: 11px;
+}
+.ops-col {
+  width: 70px;
+  text-align: right;
+  white-space: nowrap;
+}
+.row-op {
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  margin-left: 2px;
+}
+.row-op:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+.row-op.danger:hover {
+  color: var(--danger);
 }
 .pill-accent {
   background: var(--accent-soft);
