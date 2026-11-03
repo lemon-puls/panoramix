@@ -110,6 +110,7 @@ export default {
     history: '查询历史',
     flatMode: '平铺显示',
     treeMode: '树形显示',
+    zeroRows: '查询执行成功，但没有返回数据（0 行）',
   },
   settings: {
     sessionLog: '会话日志（按天落文件）',

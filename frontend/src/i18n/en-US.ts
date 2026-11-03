@@ -111,6 +111,7 @@ export default {
     history: 'History',
     flatMode: 'Flat view',
     treeMode: 'Tree view',
+    zeroRows: 'Query succeeded but returned no rows',
   },
   settings: {
     sessionLog: 'Session log (daily files)',

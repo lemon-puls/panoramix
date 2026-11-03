@@ -104,6 +104,8 @@ const selectedTable = ref('')
 const tableColumns = ref<models.db.ColumnInfo[]>([])
 const tableDDL = ref('')
 const showDDL = ref(false)
+// 结果区显示模式：执行查询 → result；单击表 → structure；查看 DDL → ddl
+const viewMode = ref<'result' | 'structure' | 'ddl'>('result')
 
 async function toggleConn() {
   if (!active.value || isRedis.value) return
@@ -146,6 +148,7 @@ async function selectTable(db: string, table: models.db.TableInfo) {
   currentDb.value = db
   selectedTable.value = table.name
   showDDL.value = false
+  viewMode.value = 'structure'
   try {
     tableColumns.value = (await DBDescribeTable(active.value.id, db, table.name)) ?? []
   } catch (e) {
@@ -158,6 +161,7 @@ async function openTableData(db: string, table: models.db.TableInfo) {
   currentDb.value = db
   selectedTable.value = table.name
   showDDL.value = false
+  viewMode.value = 'result'
   sqlText.value = `SELECT * FROM \`${db}\`.\`${table.name}\` LIMIT 200;`
   await runQuery()
 }
@@ -167,6 +171,7 @@ async function loadDDL() {
   try {
     tableDDL.value = await DBShowCreateTable(active.value.id, currentDb.value, selectedTable.value)
     showDDL.value = true
+    viewMode.value = 'ddl'
   } catch (e) {
     message.error(String(e))
   }
@@ -176,6 +181,7 @@ async function loadDDL() {
 
 const sqlText = ref('SELECT 1')
 const result = ref<models.db.Result | null>(null)
+const queryError = ref('')
 const running = ref(false)
 const sortState = reactive({ col: -1, dir: 1 as 1 | -1 })
 const selectedCell = reactive({ row: -1, col: -1 })
@@ -203,17 +209,29 @@ function pushHistory(sql: string) {
 }
 
 async function runQuery() {
-  if (!active.value) return
+  if (!active.value) {
+    message.warning(t('db.pickConn'))
+    return
+  }
   const text = sqlText.value.trim()
   if (!text) return
   running.value = true
+  viewMode.value = 'result'
+  queryError.value = ''
   try {
     result.value = await DBQuery(active.value.id, text, 1000)
     sortState.col = -1
     selectedCell.row = -1
     selectedCell.col = -1
     pushHistory(text)
+    if (
+      (!result.value.rows || result.value.rows.length === 0) &&
+      (result.value.columns?.length ?? 0) > 0
+    ) {
+      message.info(t('db.zeroRows'))
+    }
   } catch (e) {
+    queryError.value = String(e)
     message.error(String(e))
     result.value = null
   } finally {
@@ -486,6 +504,7 @@ watch(activeId, () => {
   tableColumns.value = []
   tableDDL.value = ''
   showDDL.value = false
+  viewMode.value = 'result'
   result.value = null
   redisKeys.value = []
   redisCursor.value = 0
@@ -647,7 +666,7 @@ void load()
         />
 
         <!-- 表结构视图（单击表时） -->
-        <div v-if="selectedTable && !showDDL" class="result">
+        <div v-if="viewMode === 'structure' && selectedTable" class="result">
           <div class="result-meta">
             {{ t('db.tableStructure', { table: selectedTable }) }}
             <span class="spacer" />
@@ -680,18 +699,19 @@ void load()
         </div>
 
         <!-- DDL -->
-        <div v-else-if="showDDL" class="result">
+        <div v-else-if="viewMode === 'ddl'" class="result">
           <div class="result-meta">
             {{ t('db.ddlTitle') }}
             <span class="spacer" />
-            <a class="link" @click="showDDL = false">{{ t('db.backToResult') }}</a>
+            <a class="link" @click="viewMode = result ? 'result' : 'structure'">{{ t('db.backToResult') }}</a>
           </div>
           <pre class="ddl">{{ tableDDL }}</pre>
         </div>
 
         <!-- 查询结果 -->
         <div v-else class="result">
-          <div v-if="!result" class="result-empty">{{ t('db.noResult') }}</div>
+          <div v-if="queryError" class="query-error">{{ queryError }}</div>
+          <div v-else-if="!result" class="result-empty">{{ t('db.noResult') }}</div>
           <template v-else-if="result.columns && result.columns.length > 0">
             <div class="result-meta">
               {{ result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ result.durationMs }}ms
@@ -1050,6 +1070,15 @@ void load()
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   overflow: hidden;
+}
+.query-error {
+  margin: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(232, 128, 128, 0.12);
+  color: #e88080;
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 .result-empty {
   margin: auto;
