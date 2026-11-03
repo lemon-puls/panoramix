@@ -182,6 +182,30 @@ export namespace app {
 
 export namespace db {
 	
+	export class ColumnInfo {
+	    field: string;
+	    type: string;
+	    null: string;
+	    key: string;
+	    default?: string;
+	    extra: string;
+	    comment: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ColumnInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.field = source["field"];
+	        this.type = source["type"];
+	        this.null = source["null"];
+	        this.key = source["key"];
+	        this.default = source["default"];
+	        this.extra = source["extra"];
+	        this.comment = source["comment"];
+	    }
+	}
 	export class KeyInfo {
 	    key: string;
 	    ttl: number;
@@ -248,6 +272,24 @@ export namespace db {
 	        this.affected = source["affected"];
 	        this.durationMs = source["durationMs"];
 	        this.truncated = source["truncated"];
+	    }
+	}
+	export class TableInfo {
+	    name: string;
+	    isView: boolean;
+	    rows: number;
+	    comment: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TableInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.isView = source["isView"];
+	        this.rows = source["rows"];
+	        this.comment = source["comment"];
 	    }
 	}
 	export class ZMember {

@@ -10,7 +10,15 @@ export function CloseSession(arg1:string):Promise<void>;
 
 export function ConnectHost(arg1:string,arg2:string):Promise<app.ConnectHostResult>;
 
+export function DBDescribeTable(arg1:string,arg2:string,arg3:string):Promise<Array<db.ColumnInfo>>;
+
+export function DBListDatabases(arg1:string):Promise<Array<string>>;
+
+export function DBListTables(arg1:string,arg2:string):Promise<Array<db.TableInfo>>;
+
 export function DBQuery(arg1:string,arg2:string,arg3:number):Promise<db.Result>;
+
+export function DBShowCreateTable(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function DeleteDBConn(arg1:string):Promise<void>;
 

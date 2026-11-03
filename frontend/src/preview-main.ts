@@ -68,6 +68,18 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
     { id: 'mysql-1', name: '本地 MySQL', kind: 'mysql', addr: '127.0.0.1', port: 3306, username: 'root', dbName: 'demo', hasSecret: true, sort: 0 },
     { id: 'redis-1', name: '本地 Redis', kind: 'redis', addr: '127.0.0.1', port: 6379, username: '', dbName: '0', hasSecret: true, sort: 1 },
   ],
+  DBListDatabases: async () => ['demo', 'information_schema', 'mysql'],
+  DBListTables: async () => [
+    { name: 'users', isView: false, rows: 1280, comment: '用户表' },
+    { name: 'orders', isView: false, rows: 45210, comment: '' },
+    { name: 'v_user_summary', isView: true, rows: 0, comment: '视图' },
+  ],
+  DBDescribeTable: async () => [
+    { field: 'id', type: 'bigint unsigned', null: 'NO', key: 'PRI', default: undefined, extra: 'auto_increment', comment: '' },
+    { field: 'name', type: 'varchar(64)', null: 'NO', key: 'UNI', default: '', extra: '', comment: '用户名' },
+    { field: 'created_at', type: 'datetime', null: 'YES', key: '', default: 'CURRENT_TIMESTAMP', extra: '', comment: '' },
+  ],
+  DBShowCreateTable: async () => 'CREATE TABLE `users` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(64) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;',
   DBQuery: async () => ({ columns: ['id', 'name', 'created_at'], rows: [['1', 'alice', '2026-01-01 10:00:00'], ['2', null, '2026-01-02 11:30:00']], affected: 0, durationMs: 3, truncated: false }),
   RedisScanKeys: async () => ({ keys: [{ key: 'user:1', ttl: 120, type: 'string' }, { key: 'user:2', ttl: -1, type: 'hash' }], cursor: 0 }),
   RedisGetValue: async () => ({ key: 'user:1', type: 'string', ttl: 120, str: 'alice', total: 1, truncated: false }),

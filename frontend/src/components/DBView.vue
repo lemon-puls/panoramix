@@ -1,10 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
-import { NButton, NInput } from 'naive-ui'
+import { NButton, NInput, NInputNumber } from 'naive-ui'
 import {
+  DBDescribeTable,
+  DBListDatabases,
+  DBListTables,
   DBQuery,
+  DBShowCreateTable,
   DeleteDBConn,
   ListDBConns,
   RedisDeleteKey,
@@ -18,7 +22,8 @@ import {
 import * as models from '../../wailsjs/go/models'
 import DBConnModal from './DBConnModal.vue'
 
-// 数据库视图：左侧连接列表，右侧按类型渲染 SQL 编辑器（MySQL）或键浏览器（Redis）
+// 数据库视图（HeidiSQL 风格）：
+// 左：连接 → 库 → 表 树；右：SQL 工作台（编辑器 + 结果/结构）或 Redis 值查看器
 const { t } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
@@ -27,24 +32,22 @@ const conns = ref<models.store.DBConn[]>([])
 const activeId = ref<string>('')
 const modal = ref(false)
 const editing = ref<models.store.DBConn | null>(null)
+const loadError = ref('')
 
 const active = computed(() => conns.value.find((c) => c.id === activeId.value) ?? null)
 const isRedis = computed(() => active.value?.kind === 'redis')
 
-const loadError = ref('')
+// ---------- 连接管理 ----------
 
 async function load() {
   try {
     conns.value = (await ListDBConns()) ?? []
     if (!activeId.value && conns.value.length > 0) activeId.value = conns.value[0].id
   } catch (e) {
-    // 桥接缺失（如后端未重启）时把原因显示出来，而不是静默空白
     loadError.value = String(e)
     console.error('[db] load connections failed', e)
   }
 }
-
-
 
 function openNew() {
   editing.value = null
@@ -88,11 +91,116 @@ async function testConn(c: models.store.DBConn) {
   }
 }
 
-// ---------- MySQL ----------
+// ---------- MySQL 库/表树 ----------
+
+const databases = ref<string[]>([])
+const tablesByDb = reactive<Record<string, models.db.TableInfo[]>>({})
+const expandedDbs = ref<Set<string>>(new Set())
+const currentDb = ref('')
+const treeLoading = ref(false)
+
+// 当前选中的表（右侧显示结构或数据）
+const selectedTable = ref('')
+const tableColumns = ref<models.db.ColumnInfo[]>([])
+const tableDDL = ref('')
+const showDDL = ref(false)
+
+async function toggleConn() {
+  if (!active.value || isRedis.value) return
+  if (databases.value.length > 0) {
+    databases.value = []
+    expandedDbs.value = new Set()
+    return
+  }
+  treeLoading.value = true
+  try {
+    databases.value = (await DBListDatabases(active.value.id)) ?? []
+  } catch (e) {
+    message.error(String(e))
+  } finally {
+    treeLoading.value = false
+  }
+}
+
+async function toggleDb(db: string) {
+  if (!active.value) return
+  const next = new Set(expandedDbs.value)
+  if (next.has(db)) {
+    next.delete(db)
+  } else {
+    next.add(db)
+    if (!tablesByDb[db]) {
+      try {
+        tablesByDb[db] = (await DBListTables(active.value.id, db)) ?? []
+      } catch (e) {
+        message.error(String(e))
+        tablesByDb[db] = []
+      }
+    }
+  }
+  expandedDbs.value = next
+}
+
+async function selectTable(db: string, table: models.db.TableInfo) {
+  if (!active.value) return
+  currentDb.value = db
+  selectedTable.value = table.name
+  showDDL.value = false
+  try {
+    tableColumns.value = (await DBDescribeTable(active.value.id, db, table.name)) ?? []
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+// 双击表：生成 SELECT 并执行
+async function openTableData(db: string, table: models.db.TableInfo) {
+  currentDb.value = db
+  selectedTable.value = table.name
+  showDDL.value = false
+  sqlText.value = `SELECT * FROM \`${db}\`.\`${table.name}\` LIMIT 200;`
+  await runQuery()
+}
+
+async function loadDDL() {
+  if (!active.value || !selectedTable.value) return
+  try {
+    tableDDL.value = await DBShowCreateTable(active.value.id, currentDb.value, selectedTable.value)
+    showDDL.value = true
+  } catch (e) {
+    message.error(String(e))
+  }
+}
+
+// ---------- SQL 工作台 ----------
 
 const sqlText = ref('SELECT 1')
 const result = ref<models.db.Result | null>(null)
 const running = ref(false)
+const sortState = reactive({ col: -1, dir: 1 as 1 | -1 })
+const selectedCell = reactive({ row: -1, col: -1 })
+
+// 查询历史（localStorage，最多 50 条）
+const HISTORY_KEY = 'panoramix.sqlHistory'
+const history = ref<string[]>([])
+function loadHistory() {
+  try {
+    history.value = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
+  } catch {
+    history.value = []
+  }
+}
+loadHistory()
+
+function pushHistory(sql: string) {
+  const list = [sql, ...history.value.filter((h) => h !== sql)].slice(0, 50)
+  history.value = list
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(list))
+  } catch {
+    /* 忽略 */
+  }
+}
 
 async function runQuery() {
   if (!active.value) return
@@ -101,12 +209,73 @@ async function runQuery() {
   running.value = true
   try {
     result.value = await DBQuery(active.value.id, text, 1000)
+    sortState.col = -1
+    selectedCell.row = -1
+    selectedCell.col = -1
+    pushHistory(text)
   } catch (e) {
     message.error(String(e))
     result.value = null
   } finally {
     running.value = false
   }
+}
+
+// 本地排序（不改 SQL）
+const sortedRows = computed(() => {
+  const rows = result.value?.rows ?? []
+  const { col, dir } = sortState
+  if (col < 0) return rows
+  return [...rows].sort((a, b) => {
+    const av = a[col]
+    const bv = b[col]
+    if (av === null && bv === null) return 0
+    if (av === null) return 1
+    if (bv === null) return -1
+    const na = Number(av)
+    const nb = Number(bv)
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) return (na - nb) * dir
+    return av.localeCompare(bv) * dir
+  })
+})
+
+function toggleSort(col: number) {
+  if (sortState.col === col) sortState.dir = sortState.dir === 1 ? -1 : 1
+  else {
+    sortState.col = col
+    sortState.dir = 1
+  }
+}
+
+function copyCell(row: number, col: number) {
+  const v = sortedRows.value[row]?.[col]
+  selectedCell.row = row
+  selectedCell.col = col
+  if (v == null) return
+  navigator.clipboard?.writeText(v).then(
+    () => message.success(t('db.copied')),
+    () => {
+      /* 忽略 */
+    },
+  )
+}
+
+// 导出 CSV（当前结果集，应用当前排序）
+function exportCSV() {
+  if (!result.value?.columns?.length) return
+  const esc = (v: string | null) => {
+    if (v == null) return ''
+    return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+  }
+  const lines = [result.value.columns.map(esc).join(',')]
+  for (const row of sortedRows.value) lines.push(row.map(esc).join(','))
+  const blob = new Blob([`﻿${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${selectedTable.value || 'query'}_${Date.now()}.csv`
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 // ---------- Redis ----------
@@ -129,8 +298,7 @@ async function loadRedisFirstPage() {
 }
 
 async function loadRedisMore(reset = false) {
-  if (!active.value) return
-  if (redisLoading.value) return
+  if (!active.value || redisLoading.value) return
   if (!reset && redisCursor.value === 0 && redisKeys.value.length > 0) return
   redisLoading.value = true
   try {
@@ -211,19 +379,6 @@ function fmtTTL(ttl: number): string {
   return `${Math.floor(ttl / 3600)}h`
 }
 
-// 会话切换时清空工作区状态（放在所有 ref 定义之后，避免 TDZ）
-watch(activeId, () => {
-  result.value = null
-  redisKeys.value = []
-  redisCursor.value = 0
-  redisValue.value = null
-  redisSelected.value = ''
-  sqlText.value = ''
-  if (active.value) void loadRedisFirstPage()
-})
-
-void load()
-
 const typeColors: Record<string, string> = {
   string: '#63e2b7',
   hash: '#4a9ffd',
@@ -232,105 +387,97 @@ const typeColors: Record<string, string> = {
   zset: '#d4380d',
   stream: '#888',
 }
+
+// ---------- 连接切换时重置 ----------
+
+watch(activeId, () => {
+  databases.value = []
+  Object.keys(tablesByDb).forEach((k) => delete tablesByDb[k])
+  expandedDbs.value = new Set()
+  currentDb.value = ''
+  selectedTable.value = ''
+  tableColumns.value = []
+  tableDDL.value = ''
+  showDDL.value = false
+  result.value = null
+  redisKeys.value = []
+  redisCursor.value = 0
+  redisValue.value = null
+  redisSelected.value = ''
+  sqlText.value = 'SELECT 1'
+  if (active.value && isRedis.value) void loadRedisFirstPage()
+})
+
+void load()
 </script>
 
 <template>
   <div class="db-view">
-    <!-- 左：连接列表 -->
-    <div class="conns">
-      <div class="conns-head">
+    <!-- 左：连接 + 库/表树 -->
+    <div class="sidebar">
+      <div class="sidebar-head">
         <span>{{ t('db.connections') }}</span>
         <n-button size="tiny" type="primary" @click="openNew">{{ t('db.newConn') }}</n-button>
       </div>
-      <div class="conn-list">
+      <div class="tree-scroll">
+        <div v-if="loadError" class="load-error">{{ loadError }}</div>
         <div
           v-for="c in conns"
           :key="c.id"
-          class="conn-item"
-          :class="{ active: c.id === activeId }"
-          @click="activeId = c.id"
+          class="conn-block"
         >
-          <span class="kind" :class="c.kind">{{ c.kind === 'redis' ? 'R' : 'M' }}</span>
-          <span class="conn-name" :title="`${c.addr}:${c.port}`">{{ c.name }}</span>
-          <span class="conn-ops">
-            <span class="op" :title="t('db.test')" @click.stop="testConn(c)">⚡</span>
-            <span class="op" :title="t('menu.edit')" @click.stop="openEdit(c)">✎</span>
-            <span class="op danger" :title="t('common.delete')" @click.stop="askDelete(c)">×</span>
-          </span>
-        </div>
-        <div v-if="conns.length === 0" class="conn-empty">{{ t('db.noConns') }}</div>
-      </div>
-    </div>
-
-    <!-- 右：工作区 -->
-    <div class="workspace">
-      <div v-if="loadError" class="load-error">{{ loadError }}</div>
-      <div v-else-if="!active" class="placeholder">{{ t('db.pickConn') }}</div>
-
-      <!-- MySQL -->
-      <template v-else-if="!isRedis">
-        <div class="sql-bar">
-          <span class="ws-title">{{ active.name }} · {{ active.addr }}:{{ active.port }}</span>
-          <span class="spacer" />
-          <n-button size="small" type="primary" :loading="running" @click="runQuery">
-            {{ t('db.run') }} (Ctrl+Enter)
-          </n-button>
-        </div>
-        <textarea
-          v-model="sqlText"
-          class="sql-editor"
-          spellcheck="false"
-          :placeholder="t('db.sqlPlaceholder')"
-          @keydown.ctrl.enter.prevent="runQuery"
-          @keydown.meta.enter.prevent="runQuery"
-        />
-        <div class="result">
-          <div v-if="!result" class="result-empty">{{ t('db.noResult') }}</div>
-          <template v-else-if="result.columns && result.columns.length > 0">
-            <div class="result-meta">
-              {{ result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ result.durationMs }}ms
-              <span v-if="result.truncated" class="warn">· {{ t('db.truncated') }}</span>
-            </div>
-            <div class="grid-wrap">
-              <table class="grid">
-                <thead>
-                  <tr>
-                    <th class="rownum">#</th>
-                    <th v-for="c in result.columns" :key="c">{{ c }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, ri) in result.rows" :key="ri">
-                    <td class="rownum">{{ ri + 1 }}</td>
-                    <td v-for="(cell, ci) in row" :key="ci" :class="{ null: cell === null }">
-                      {{ cell === null ? 'NULL' : cell }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </template>
-          <div v-else class="result-meta">
-            {{ t('db.affected', { n: result.affected }) }} · {{ result.durationMs }}ms
+          <div class="conn-item" :class="{ active: c.id === activeId }" @click="activeId = c.id">
+            <span class="twist" @click.stop="c.id === activeId && !isRedis && toggleConn()">
+              {{ c.kind === 'redis' ? '●' : databases.length > 0 && c.id === activeId ? '▾' : '▸' }}
+            </span>
+            <span class="kind" :class="c.kind">{{ c.kind === 'redis' ? 'R' : 'M' }}</span>
+            <span class="conn-name" :title="`${c.addr}:${c.port}`">{{ c.name }}</span>
+            <span class="conn-ops">
+              <span class="op" :title="t('db.test')" @click.stop="testConn(c)">⚡</span>
+              <span class="op" :title="t('menu.edit')" @click.stop="openEdit(c)">✎</span>
+              <span class="op danger" :title="t('common.delete')" @click.stop="askDelete(c)">×</span>
+            </span>
           </div>
-        </div>
-      </template>
 
-      <!-- Redis -->
-      <template v-else>
-        <div class="sql-bar">
-          <span class="ws-title">{{ active.name }} · db{{ active.dbName || 0 }}</span>
-          <n-input
-            v-model:value="redisPattern"
-            size="small"
-            :placeholder="t('db.keyPattern')"
-            style="width: 220px"
-            @keyup.enter="loadRedisFirstPage"
-          />
-          <n-button size="small" @click="loadRedisFirstPage">{{ t('db.scan') }}</n-button>
-        </div>
-        <div class="redis-body">
-          <div class="keys">
+          <!-- MySQL：库 → 表 -->
+          <template v-if="c.id === activeId && !isRedis">
+            <div v-for="db in databases" :key="db" class="db-block">
+              <div class="db-item" :class="{ active: currentDb === db && !selectedTable }" @click="toggleDb(db)">
+                <span class="twist">{{ expandedDbs.has(db) ? '▾' : '▸' }}</span>
+                <span class="db-name">{{ db }}</span>
+                <span v-if="tablesByDb[db]" class="db-count">{{ tablesByDb[db].length }}</span>
+              </div>
+              <div v-if="expandedDbs.has(db)" class="table-list">
+                <div
+                  v-for="tb in tablesByDb[db] ?? []"
+                  :key="tb.name"
+                  class="table-item"
+                  :class="{ active: selectedTable === tb.name && currentDb === db }"
+                  :title="`${tb.name}${tb.comment ? ' — ' + tb.comment : ''}`"
+                  @click="selectTable(db, tb)"
+                  @dblclick="openTableData(db, tb)"
+                >
+                  <span class="table-icon">{{ tb.isView ? '◇' : '▤' }}</span>
+                  <span class="table-name">{{ tb.name }}</span>
+                  <span class="table-rows">{{ tb.rows > 0 ? tb.rows : '' }}</span>
+                </div>
+                <div v-if="(tablesByDb[db] ?? []).length === 0" class="tree-empty">{{ t('db.noTables') }}</div>
+              </div>
+            </div>
+            <div v-if="databases.length === 0 && !treeLoading" class="tree-empty">{{ t('db.expandHint') }}</div>
+          </template>
+
+          <!-- Redis：键列表内嵌在侧栏 -->
+          <template v-else-if="c.id === activeId && isRedis">
+            <div class="redis-filter">
+              <n-input
+                v-model:value="redisPattern"
+                size="tiny"
+                :placeholder="t('db.keyPattern')"
+                @keyup.enter="loadRedisFirstPage"
+              />
+              <n-button size="tiny" @click="loadRedisFirstPage">{{ t('db.scan') }}</n-button>
+            </div>
             <div
               v-for="k in redisKeys"
               :key="k.key"
@@ -342,7 +489,7 @@ const typeColors: Record<string, string> = {
               <span class="key-name" :title="k.key">{{ k.key }}</span>
               <span class="key-ttl">{{ fmtTTL(k.ttl) }}</span>
             </div>
-            <div v-if="redisKeys.length === 0" class="conn-empty">{{ t('db.noKeys') }}</div>
+            <div v-if="redisKeys.length === 0" class="tree-empty">{{ t('db.noKeys') }}</div>
             <n-button
               v-if="hasMoreKeys"
               size="tiny"
@@ -353,70 +500,205 @@ const typeColors: Record<string, string> = {
             >
               {{ t('db.loadMore') }}
             </n-button>
-          </div>
+          </template>
+        </div>
+      </div>
+    </div>
 
-          <div class="value">
-            <div v-if="!redisValue" class="result-empty">{{ t('db.pickKey') }}</div>
-            <template v-else>
-              <div class="value-head">
-                <span class="value-type" :style="{ color: typeColors[redisValue.type] ?? '#888' }">
-                  {{ redisValue.type }}
-                </span>
-                <span class="value-key">{{ redisValue.key }}</span>
-                <span class="spacer" />
-                <span class="ttl-label">{{ t('db.ttl') }}</span>
-                <n-input-number v-model:value="ttlInput" size="tiny" :min="0" style="width: 100px" />
-                <n-button size="tiny" @click="saveTTL">{{ t('common.save') }}</n-button>
-                <n-button size="tiny" type="error" quaternary @click="deleteKey">
-                  {{ t('common.delete') }}
+    <!-- 右：工作区 -->
+    <div class="workspace">
+      <div v-if="!active" class="placeholder">{{ t('db.pickConn') }}</div>
+
+      <!-- MySQL 工作台 -->
+      <template v-else-if="!isRedis">
+        <div class="toolbar">
+          <span class="ctx">{{ active.name }}{{ currentDb ? ` · ${currentDb}` : '' }}{{ selectedTable ? ` · ${selectedTable}` : '' }}</span>
+          <span class="spacer" />
+          <n-button size="small" :loading="running" type="primary" @click="runQuery">
+            {{ t('db.run') }}
+          </n-button>
+          <n-button size="small" :disabled="!result?.columns?.length" @click="exportCSV">
+            {{ t('db.exportCsv') }}
+          </n-button>
+        </div>
+
+        <textarea
+          v-model="sqlText"
+          class="sql-editor"
+          spellcheck="false"
+          :placeholder="t('db.sqlPlaceholder')"
+          @keydown.ctrl.enter.prevent="runQuery"
+          @keydown.meta.enter.prevent="runQuery"
+        />
+
+        <!-- 表结构视图（单击表时） -->
+        <div v-if="selectedTable && !showDDL" class="result">
+          <div class="result-meta">
+            {{ t('db.tableStructure', { table: selectedTable }) }}
+            <span class="spacer" />
+            <a class="link" @click="loadDDL">{{ t('db.showDDL') }}</a>
+          </div>
+          <div class="grid-wrap">
+            <table class="grid">
+              <thead>
+                <tr>
+                  <th>{{ t('db.colField') }}</th>
+                  <th>{{ t('db.colType') }}</th>
+                  <th>{{ t('db.colNull') }}</th>
+                  <th>{{ t('db.colKey') }}</th>
+                  <th>{{ t('db.colDefault') }}</th>
+                  <th>{{ t('db.colExtra') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="c in tableColumns" :key="c.field">
+                  <td class="mono">{{ c.field }}</td>
+                  <td class="mono">{{ c.type }}</td>
+                  <td>{{ c.null }}</td>
+                  <td>{{ c.key }}</td>
+                  <td class="mono">{{ c.default ?? 'NULL' }}</td>
+                  <td>{{ c.extra }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- DDL -->
+        <div v-else-if="showDDL" class="result">
+          <div class="result-meta">
+            {{ t('db.ddlTitle') }}
+            <span class="spacer" />
+            <a class="link" @click="showDDL = false">{{ t('db.backToResult') }}</a>
+          </div>
+          <pre class="ddl">{{ tableDDL }}</pre>
+        </div>
+
+        <!-- 查询结果 -->
+        <div v-else class="result">
+          <div v-if="!result" class="result-empty">{{ t('db.noResult') }}</div>
+          <template v-else-if="result.columns && result.columns.length > 0">
+            <div class="result-meta">
+              {{ result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ result.durationMs }}ms
+              <span v-if="result.truncated" class="warn">· {{ t('db.truncated') }}</span>
+              <span class="spacer" />
+              <span class="hint">{{ t('db.clickSort') }}</span>
+            </div>
+            <div class="grid-wrap">
+              <table class="grid">
+                <thead>
+                  <tr>
+                    <th class="rownum">#</th>
+                    <th
+                      v-for="(c, ci) in result.columns"
+                      :key="c"
+                      class="sortable"
+                      @click="toggleSort(ci)"
+                    >
+                      {{ c }}
+                      <span v-if="sortState.col === ci" class="sort">{{ sortState.dir === 1 ? '▲' : '▼' }}</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, ri) in sortedRows" :key="ri">
+                    <td class="rownum">{{ ri + 1 }}</td>
+                    <td
+                      v-for="(cell, ci) in row"
+                      :key="ci"
+                      :class="{ null: cell === null, selected: selectedCell.row === ri && selectedCell.col === ci }"
+                      @click="copyCell(ri, ci)"
+                    >
+                      {{ cell === null ? 'NULL' : cell }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </template>
+          <div v-else class="result-meta">
+            {{ t('db.affected', { n: result.affected }) }} · {{ result.durationMs }}ms
+          </div>
+        </div>
+
+        <!-- 查询历史 -->
+        <div v-if="history.length" class="history">
+          <div class="history-head">{{ t('db.history') }}</div>
+          <div class="history-list">
+            <div
+              v-for="(h, i) in history.slice(0, 8)"
+              :key="i"
+              class="history-item"
+              :title="h"
+              @click="sqlText = h"
+            >
+              {{ h }}
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- Redis 值查看器 -->
+      <template v-else>
+        <div class="value">
+          <div v-if="!redisValue" class="result-empty">{{ t('db.pickKey') }}</div>
+          <template v-else>
+            <div class="value-head">
+              <span class="value-type" :style="{ color: typeColors[redisValue.type] ?? '#888' }">
+                {{ redisValue.type }}
+              </span>
+              <span class="value-key">{{ redisValue.key }}</span>
+              <span class="spacer" />
+              <span class="ttl-label">{{ t('db.ttl') }}</span>
+              <n-input-number v-model:value="ttlInput" size="tiny" :min="0" style="width: 100px" />
+              <n-button size="tiny" @click="saveTTL">{{ t('common.save') }}</n-button>
+              <n-button size="tiny" type="error" quaternary @click="deleteKey">
+                {{ t('common.delete') }}
+              </n-button>
+            </div>
+            <div v-if="redisValue.truncated" class="warn-line">
+              {{ t('db.truncatedValue', { n: redisValue.total }) }}
+            </div>
+
+            <template v-if="redisValue.type === 'string'">
+              <div v-if="!editingValue" class="str-value">
+                <pre>{{ redisValue.str }}</pre>
+                <n-button size="tiny" class="edit-btn" @click="editingValue = true">
+                  {{ t('menu.edit') }}
                 </n-button>
               </div>
-              <div v-if="redisValue.truncated" class="warn-line">{{ t('db.truncatedValue', { n: redisValue.total }) }}</div>
-
-              <!-- string -->
-              <template v-if="redisValue.type === 'string'">
-                <div v-if="!editingValue" class="str-value">
-                  <pre>{{ redisValue.str }}</pre>
-                  <n-button size="tiny" class="edit-btn" @click="editingValue = true">
-                    {{ t('menu.edit') }}
-                  </n-button>
-                </div>
-                <div v-else class="str-edit">
-                  <textarea v-model="editValue" class="str-editor" spellcheck="false" />
-                  <div class="str-actions">
-                    <n-button size="tiny" @click="editingValue = false">{{ t('common.cancel') }}</n-button>
-                    <n-button size="tiny" type="primary" @click="saveStringValue">{{ t('common.save') }}</n-button>
-                  </div>
-                </div>
-              </template>
-
-              <!-- hash -->
-              <div v-else-if="redisValue.type === 'hash'" class="kv-table">
-                <div v-for="(v, k) in redisValue.hash" :key="k" class="kv-row">
-                  <span class="kv-key">{{ k }}</span>
-                  <span class="kv-val">{{ v }}</span>
+              <div v-else class="str-edit">
+                <textarea v-model="editValue" class="str-editor" spellcheck="false" />
+                <div class="str-actions">
+                  <n-button size="tiny" @click="editingValue = false">{{ t('common.cancel') }}</n-button>
+                  <n-button size="tiny" type="primary" @click="saveStringValue">{{ t('common.save') }}</n-button>
                 </div>
               </div>
-
-              <!-- list / set -->
-              <div v-else-if="redisValue.type === 'list' || redisValue.type === 'set'" class="kv-table">
-                <div v-for="(v, i) in (redisValue.list ?? redisValue.set ?? [])" :key="i" class="kv-row">
-                  <span class="kv-idx">{{ i }}</span>
-                  <span class="kv-val">{{ v }}</span>
-                </div>
-              </div>
-
-              <!-- zset -->
-              <div v-else-if="redisValue.type === 'zset'" class="kv-table">
-                <div v-for="(m, i) in redisValue.zset" :key="i" class="kv-row">
-                  <span class="kv-idx">{{ m.score }}</span>
-                  <span class="kv-val">{{ m.member }}</span>
-                </div>
-              </div>
-
-              <div v-else class="result-empty">{{ t('db.unsupportedType', { type: redisValue.type }) }}</div>
             </template>
-          </div>
+
+            <div v-else-if="redisValue.type === 'hash'" class="kv-table">
+              <div v-for="(v, k) in redisValue.hash" :key="k" class="kv-row">
+                <span class="kv-key">{{ k }}</span>
+                <span class="kv-val">{{ v }}</span>
+              </div>
+            </div>
+
+            <div v-else-if="redisValue.type === 'list' || redisValue.type === 'set'" class="kv-table">
+              <div v-for="(v, i) in (redisValue.list ?? redisValue.set ?? [])" :key="i" class="kv-row">
+                <span class="kv-idx">{{ i }}</span>
+                <span class="kv-val">{{ v }}</span>
+              </div>
+            </div>
+
+            <div v-else-if="redisValue.type === 'zset'" class="kv-table">
+              <div v-for="(m, i) in redisValue.zset" :key="i" class="kv-row">
+                <span class="kv-idx">{{ m.score }}</span>
+                <span class="kv-val">{{ m.member }}</span>
+              </div>
+            </div>
+
+            <div v-else class="result-empty">{{ t('db.unsupportedType', { type: redisValue.type }) }}</div>
+          </template>
         </div>
       </template>
     </div>
@@ -431,8 +713,9 @@ const typeColors: Record<string, string> = {
   height: 100%;
   gap: 8px;
 }
-.conns {
-  width: 190px;
+/* ---------- 左侧栏 ---------- */
+.sidebar {
+  width: 250px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -440,55 +723,77 @@ const typeColors: Record<string, string> = {
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   padding-right: 8px;
 }
-.conns-head {
+.sidebar-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
-  opacity: 0.7;
+  opacity: 0.75;
 }
-.conn-list {
+.tree-scroll {
   flex: 1;
+  min-height: 0;
   overflow: auto;
 }
-.conn-item {
+.conn-block {
+  margin-bottom: 2px;
+}
+.conn-item,
+.db-item,
+.table-item,
+.key-item {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
+  gap: 5px;
+  padding: 3px 5px;
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
+  white-space: nowrap;
 }
-.conn-item:hover {
+.conn-item:hover,
+.db-item:hover,
+.table-item:hover,
+.key-item:hover {
   background: rgba(255, 255, 255, 0.06);
 }
-.conn-item.active {
+.conn-item.active,
+.table-item.active,
+.key-item.active {
   background: rgba(99, 226, 183, 0.12);
 }
+.twist {
+  width: 10px;
+  flex-shrink: 0;
+  font-size: 9px;
+  opacity: 0.6;
+}
 .kind {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   border-radius: 3px;
-  font-size: 10px;
-  line-height: 16px;
+  font-size: 9px;
+  line-height: 15px;
   text-align: center;
   background: rgba(74, 159, 253, 0.2);
   color: #4a9ffd;
+  flex-shrink: 0;
 }
 .kind.redis {
   background: rgba(212, 56, 13, 0.2);
   color: #ff7a45;
 }
-.conn-name {
+.conn-name,
+.db-name,
+.table-name,
+.key-name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .conn-ops {
   display: none;
-  gap: 4px;
+  gap: 3px;
 }
 .conn-item:hover .conn-ops {
   display: inline-flex;
@@ -503,11 +808,62 @@ const typeColors: Record<string, string> = {
 .op.danger {
   color: #e88080;
 }
-.conn-empty {
+.db-block {
+  padding-left: 12px;
+}
+.db-item {
+  color: rgba(255, 255, 255, 0.85);
+}
+.db-count {
+  font-size: 10px;
+  opacity: 0.4;
+}
+.table-list {
+  padding-left: 16px;
+}
+.table-icon {
+  font-size: 9px;
+  opacity: 0.5;
+  width: 10px;
+}
+.table-rows {
+  font-size: 10px;
+  opacity: 0.35;
+  font-variant-numeric: tabular-nums;
+}
+.tree-empty {
   font-size: 11px;
   opacity: 0.4;
-  padding: 8px 6px;
+  padding: 4px 8px;
 }
+.redis-filter {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0 4px 12px;
+}
+.more-btn {
+  width: 100%;
+}
+.key-type {
+  font-size: 9px;
+  width: 32px;
+  flex-shrink: 0;
+}
+.key-ttl {
+  font-size: 10px;
+  opacity: 0.45;
+}
+.load-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(232, 128, 128, 0.12);
+  color: #e88080;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+/* ---------- 右侧工作区 ---------- */
 .workspace {
   flex: 1;
   min-width: 0;
@@ -515,35 +871,30 @@ const typeColors: Record<string, string> = {
   flex-direction: column;
   gap: 6px;
 }
-.load-error {
-  margin: 20px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: rgba(232, 128, 128, 0.12);
-  color: #e88080;
-  font-size: 12px;
-  white-space: pre-wrap;
-}
 .placeholder {
   margin: auto;
   opacity: 0.4;
   font-size: 13px;
 }
-.sql-bar {
+.toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.ws-title {
+.ctx {
   font-size: 12px;
   opacity: 0.75;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 50%;
 }
 .spacer {
   flex: 1;
 }
 .sql-editor {
   width: 100%;
-  height: 140px;
+  height: 130px;
   resize: vertical;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -573,13 +924,25 @@ const typeColors: Record<string, string> = {
   font-size: 12px;
 }
 .result-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 6px 10px;
   font-size: 11px;
-  opacity: 0.6;
+  opacity: 0.65;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  flex-shrink: 0;
 }
 .warn {
   color: #f0a020;
+}
+.hint {
+  font-size: 10px;
+  opacity: 0.5;
+}
+.link {
+  color: #63e2b7;
+  cursor: pointer;
 }
 .grid-wrap {
   flex: 1;
@@ -608,8 +971,25 @@ const typeColors: Record<string, string> = {
   font-weight: 500;
   z-index: 1;
 }
+.grid th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.grid th.sortable:hover {
+  color: #fff;
+}
+.sort {
+  font-size: 8px;
+  color: #63e2b7;
+}
 .grid tbody tr:hover {
   background: rgba(255, 255, 255, 0.04);
+}
+.grid td {
+  cursor: pointer;
+}
+.grid td.selected {
+  background: rgba(99, 226, 183, 0.18);
 }
 .rownum {
   color: rgba(255, 255, 255, 0.3);
@@ -620,56 +1000,58 @@ const typeColors: Record<string, string> = {
   color: rgba(255, 255, 255, 0.3);
   font-style: italic;
 }
-.redis-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  gap: 8px;
+.mono {
+  font-family: Consolas, monospace;
+  font-size: 11px;
 }
-.keys {
-  width: 300px;
-  flex-shrink: 0;
+.ddl {
+  flex: 1;
   overflow: auto;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 6px;
-  padding: 4px;
-}
-.key-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 6px;
-  border-radius: 4px;
-  cursor: pointer;
+  margin: 0;
+  padding: 10px;
+  font-family: Consolas, monospace;
   font-size: 12px;
+  white-space: pre-wrap;
+  color: #d4d4d4;
 }
-.key-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-.key-item.active {
-  background: rgba(99, 226, 183, 0.12);
-}
-.key-type {
-  font-size: 9px;
-  width: 34px;
+.history {
   flex-shrink: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 4px;
 }
-.key-name {
-  flex: 1;
+.history-head {
+  font-size: 10px;
+  opacity: 0.5;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+}
+.history-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 110px;
+  overflow: auto;
+}
+.history-item {
+  font-size: 11px;
+  font-family: Consolas, monospace;
+  opacity: 0.6;
+  padding: 1px 4px;
+  border-radius: 3px;
+  cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.key-ttl {
-  font-size: 10px;
-  opacity: 0.45;
+.history-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 1;
 }
-.more-btn {
-  width: 100%;
-}
+
+/* ---------- Redis 值 ---------- */
 .value {
   flex: 1;
-  min-width: 0;
+  min-height: 0;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   padding: 8px;

@@ -904,6 +904,54 @@ func (s *Service) DBQuery(id, sqlText string, limit int) (*db.Result, error) {
 	return res, nil
 }
 
+// DBListDatabases 列出数据库（MySQL）
+func (s *Service) DBListDatabases(id string) ([]string, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.dbmgr.ListDatabases(c, pw)
+}
+
+// DBListTables 列出指定库的表与视图
+func (s *Service) DBListTables(id, database string) ([]db.TableInfo, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.dbmgr.ListTables(c, pw, database)
+}
+
+// DBDescribeTable 返回列定义
+func (s *Service) DBDescribeTable(id, database, table string) ([]db.ColumnInfo, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.dbmgr.DescribeTable(c, pw, database, table)
+}
+
+// DBShowCreateTable 返回建表语句
+func (s *Service) DBShowCreateTable(id, database, table string) (string, error) {
+	if s.dbmgr == nil {
+		return "", fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return "", err
+	}
+	return s.dbmgr.ShowCreateTable(c, pw, database, table)
+}
+
 // RedisScanKeys 渐进扫描键（cursor=0 从头开始；返回 Cursor=0 表示结束）
 func (s *Service) RedisScanKeys(id string, cursor uint64, pattern string, count int) (*db.KeyPage, error) {
 	if s.dbmgr == nil {
