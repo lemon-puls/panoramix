@@ -75,11 +75,14 @@
 
 ## v0.3 —— 数据库与 Redis
 
-- MySQL：连接管理 + SQL 编辑器（CodeMirror 6，表结构喂补全）+ 只读结果网格
-  （LIMIT/OFFSET 分页 1000 行虚拟滚动，**不自动 COUNT**，复制为 CSV/JSON/INSERT、导出）
-- Redis：GUI 键管理 —— SCAN 渐进（禁 `KEYS *`）、键树按 `:` 分层、TTL 查看/修改、
-  string/hash/list/set/zset 查看器、二进制十六进制查看、JSON 自动格式化、大 value 截断加载
-- 监控历史落盘视社区需求决定（YAGNI，默认不做）
+- ✅ MySQL：连接管理（keychain 存密码）、库/表树（information_schema 行数估算）、
+  表结构（列定义 + DDL）、双击表生成 SELECT、SQL 编辑器、结果网格
+  （1000 行上限、点击表头排序、单元格复制、导出 CSV、查询历史）、**不自动 COUNT**
+- ✅ Redis：SCAN 渐进（禁 `KEYS *`）、**键树按 `:` 分层**（树形/平铺切换）、
+  TTL 查看/修改、string/hash/list/set/zset 查看器、string 值编辑、删键、大 value 截断
+- 待办：SQL 编辑器语法高亮与补全（CodeMirror 6，依赖安装受 WSL/Windows 共用
+  node_modules 阻塞）、结果分页与数据编辑（v0.4）、二进制/JSON 格式化视图、
+  Redis stream 类型、监控历史落盘（YAGNI，按需）
 
 ## v0.4 —— K3s/K8s
 

@@ -15,7 +15,7 @@ Currently pre-release, under active development.
 | 迁移导入（**Xshell** 与 **FinalShell** 批量导入） | ✅ v0.2 |
 | SFTP 文件传输（**双面板**、断点续传、暂停/限速、**远程编辑**、拖拽互传、**cwd 联动**） | ✅ v0.2 |
 | 系统监控（`/proc` 采集、GPU 探测、实时曲线） | ✅ v0.2 |
-| MySQL + Redis 管理 | 📅 v0.3 |
+| 数据库（MySQL 库/表树、表结构、SQL 执行、结果排序/导出；Redis 键树、TTL、多类型查看） | ✅ v0.3 |
 | K3s/K8s 面板（经 SSH 自动发现） | 📅 v0.4 |
 | AI 运维 | 💡 v0.5+ |
 
