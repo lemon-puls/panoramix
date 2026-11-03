@@ -130,6 +130,8 @@ export default {
     sortServerSide: 'Click to sort by this column (server ORDER BY)',
     colsView: 'Columns',
     queryTitle: 'Query',
+    tabTable: 'Table',
+    tabData: 'Data',
     tabBasic: 'Basic',
     tabIndexes: 'Indexes',
     tabForeignKeys: 'Foreign Keys',

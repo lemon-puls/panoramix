@@ -129,6 +129,8 @@ export default {
     sortServerSide: '点击按此列排序（服务端 ORDER BY）',
     colsView: '列视图',
     queryTitle: '查询',
+    tabTable: '表',
+    tabData: '数据',
     tabBasic: '基本',
     tabIndexes: '索引',
     tabForeignKeys: '外键',

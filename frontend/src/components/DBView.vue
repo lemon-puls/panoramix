@@ -144,29 +144,35 @@ async function toggleDb(db: string) {
 }
 
 // 单击表 → 打开结构标签（已存在则激活）
-// 结构标签全局复用一个（单击多种表不会堆出大量标签）
+// 表结构标签：全局唯一且固定（不可关闭），跟随当前选中的表
 async function openTableStructure(db: string, table: models.db.TableInfo) {
+  const tab = ensureStructureTab(db, table.name)
+  activeTabId.value = tab.id
+  await loadTableStructure(tab)
+}
+
+function ensureStructureTab(db: string, tableName: string): WorkTab {
   const id = activeId.value
   let tab = tabs.value.find((x) => x.kind === 'structure' && x.connId === id)
   if (tab) {
     tab.database = db
-    tab.table = table.name
-    tab.title = `${table.name} · ${t('db.structureShort')}`
+    tab.table = tableName
+    tab.title = t('db.tabTable')
     tab.showDDL = false
     tab.ddl = ''
     tab.error = ''
     tab.structView = 'basic'
-    activeTabId.value = tab.id
-  } else {
-    tab = newTab('structure', {
-      title: `${table.name} · ${t('db.structureShort')}`,
-      database: db,
-      table: table.name,
-    })
-    tabs.value.push(tab)
-    activeTabId.value = tab.id
+    return tab
   }
-  await loadTableStructure(tab)
+  tab = newTab('structure', {
+    title: t('db.tabTable'),
+    database: db,
+    table: tableName,
+    pinned: true,
+  })
+  tabs.value.push(tab)
+  sortTabs()
+  return tab
 }
 
 // 加载表结构（列/基本信息/索引/外键）
@@ -191,19 +197,29 @@ async function loadTableStructure(tab: WorkTab) {
   }
 }
 
-// 双击表 → 打开数据标签（默认 1000 条）
+// 双击表 → 打开/更新固定的「数据」标签（默认 1000 条）
 async function openTableData(db: string, table: models.db.TableInfo) {
+  // 同时确保「表」标签存在（HeidiSQL 行为：打开表即有 表/数据 两个固定标签）
+  ensureStructureTab(db, table.name)
   const id = activeId.value
-  const exist = tabs.value.find(
-    (x) => x.kind === 'data' && x.connId === id && x.database === db && x.table === table.name,
-  )
-  if (exist) {
-    activeTabId.value = exist.id
-    await loadTableData(exist, true)
-    return
+  let tab = tabs.value.find((x) => x.kind === 'data' && x.connId === id)
+  if (tab) {
+    tab.database = db
+    tab.table = table.name
+    tab.title = t('db.tabData')
+    tab.filter = ''
+    tab.sortCol = ''
+    tab.error = ''
+  } else {
+    tab = newTab('data', {
+      title: t('db.tabData'),
+      database: db,
+      table: table.name,
+      pinned: true,
+    })
+    tabs.value.push(tab)
+    sortTabs()
   }
-  const tab = newTab('data', { title: table.name, database: db, table: table.name })
-  tabs.value.push(tab)
   activeTabId.value = tab.id
   await loadTableData(tab, true)
 }
@@ -235,6 +251,7 @@ interface WorkTab {
   structView: 'basic' | 'indexes' | 'fks' | 'ddl'
   ddl: string
   showDDL: boolean
+  pinned: boolean
   gridSortCol: number
   gridSortDir: 1 | -1
   selectedRow: number
@@ -272,6 +289,7 @@ function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
     structView: 'basic',
     ddl: '',
     showDDL: false,
+    pinned: false,
     gridSortCol: -1,
     gridSortDir: 1,
     selectedRow: -1,
@@ -284,12 +302,30 @@ function openQuery() {
   const n = tabs.value.filter((x) => x.kind === 'query').length + 1
   const tab = newTab('query', { title: t('db.queryN', { n }) })
   tabs.value.push(tab)
+  sortTabs()
   activeTabId.value = tab.id
+}
+
+const canCloseTab = (tab: WorkTab): boolean => {
+  if (tab.pinned) return false
+  // 查询标签至少保留一个
+  if (tab.kind === 'query') {
+    return tabs.value.filter((x) => x.kind === 'query').length > 1
+  }
+  return true
+}
+
+// 固定顺序：表 → 数据 → 查询（同组内保持创建顺序）
+function sortTabs() {
+  const order: Record<TabKind, number> = { structure: 0, data: 1, query: 2 }
+  tabs.value.sort((a, b) => order[a.kind] - order[b.kind])
 }
 
 function closeTab(id: string) {
   const idx = tabs.value.findIndex((x) => x.id === id)
   if (idx === -1) return
+  const tab = tabs.value[idx]
+  if (!canCloseTab(tab)) return
   tabs.value.splice(idx, 1)
   if (activeTabId.value === id) activeTabId.value = tabs.value.at(-1)?.id ?? ''
 }
@@ -963,7 +999,7 @@ void load()
           >
             <span class="tab-icon">{{ tab.kind === 'query' ? '▶' : tab.kind === 'data' ? '▤' : '◇' }}</span>
             <span class="tab-title">{{ tab.title }}</span>
-            <span class="tab-close" @click.stop="closeTab(tab.id)">×</span>
+            <span v-if="canCloseTab(tab)" class="tab-close" @click.stop="closeTab(tab.id)">×</span>
           </div>
           <div class="tab-add" :title="t('db.newQueryTab')" @click="openQuery">＋</div>
         </div>
