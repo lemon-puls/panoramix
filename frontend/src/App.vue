@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onErrorCaptured, onMounted, ref } from 'vue'
+import { computed, onErrorCaptured, onMounted, provide, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   darkTheme,
@@ -16,7 +16,6 @@ import {
   zhCN,
 } from 'naive-ui'
 import { i18n } from './i18n'
-import { mainView } from './stores/view'
 import { Ping } from '../wailsjs/go/app/Service'
 import { useTerminalsStore } from './stores/terminals'
 import { useFilesStore } from './stores/files'
@@ -27,9 +26,18 @@ import SnippetsPanel from './components/SnippetsPanel.vue'
 import TerminalTabs from './components/TerminalTabs.vue'
 import FilePanel from './components/FilePanel.vue'
 import MonitorPanel from './components/MonitorPanel.vue'
+import DBView from './components/DBView.vue'
 
-// 注意：模板无法自动解包 import 进来的 ref（编译器识别不了其类型），
-// 必须用本地 computed 包装后再在模板中使用
+// 主视图状态由 App 自己持有并通过 provide 下发给侧栏——
+// 不依赖跨模块共享的 ref（HMR 下可能产生多个实例）
+// ?view=db 仅在浏览器预览时使用（Wails 环境中无此参数）
+const initialView =
+  typeof window !== 'undefined' && new URLSearchParams(location.search).get('view') === 'db'
+    ? 'db'
+    : 'terminal'
+const mainView = ref<'terminal' | 'db'>(initialView)
+provide('mainView', mainView)
+
 const isDBView = computed(() => mainView.value === 'db')
 
 // 子组件渲染异常时把错误显示出来（否则整块区域静默空白，难以排查）

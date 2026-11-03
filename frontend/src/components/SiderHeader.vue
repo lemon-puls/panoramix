@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { NButton, NInputNumber, NPopover, NSelect, NSwitch } from 'naive-ui'
 import { SUPPORTED_LOCALES, setLocale, type LocaleCode } from '../i18n'
-import { mainView } from '../stores/view'
 import {
   GetTransferSpeedLimit,
   IsCwdSyncEnabled,
@@ -18,12 +17,13 @@ import {
 // 必须渲染在 NMessageProvider 内部（useMessage 依赖注入）。
 // 模块级 ref 需在 setup 内引用才会在模板中解包
 
-// 模板无法自动解包 import 的 ref：用本地 computed 暴露状态
-const isTerminalView = computed(() => mainView.value === 'terminal')
-const isDBView = computed(() => mainView.value === 'db')
+// 主视图状态由 App provide（同一渲染树内传递，避免模块实例/HMR 问题）
+const mainView = inject<Ref<'terminal' | 'db'>>('mainView')
+const isTerminalView = computed(() => mainView?.value === 'terminal')
+const isDBView = computed(() => mainView?.value === 'db')
 
 function switchView(v: 'terminal' | 'db') {
-  mainView.value = v
+  if (mainView) mainView.value = v
 }
 
 const { t } = useI18n()
