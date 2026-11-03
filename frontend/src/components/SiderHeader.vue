@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useMessage } from 'naive-ui'
 import { NButton, NInputNumber, NPopover, NSelect, NSwitch } from 'naive-ui'
@@ -17,7 +17,14 @@ import {
 // 侧栏头部：应用标题 + 设置弹层（会话日志开关）。
 // 必须渲染在 NMessageProvider 内部（useMessage 依赖注入）。
 // 模块级 ref 需在 setup 内引用才会在模板中解包
-const view = mainView
+
+// 模板无法自动解包 import 的 ref：用本地 computed 暴露状态
+const isTerminalView = computed(() => mainView.value === 'terminal')
+const isDBView = computed(() => mainView.value === 'db')
+
+function switchView(v: 'terminal' | 'db') {
+  mainView.value = v
+}
 
 const { t } = useI18n()
 const message = useMessage()
@@ -84,15 +91,15 @@ async function onToggleLog(on: boolean) {
     <span class="view-switch">
       <button
         class="view-btn"
-        :class="{ active: view === 'terminal' }"
+        :class="{ active: isTerminalView }"
         :title="t('view.terminal')"
-        @click="view = 'terminal'"
+        @click="switchView('terminal')"
       >⌨</button>
       <button
         class="view-btn"
-        :class="{ active: view === 'db' }"
+        :class="{ active: isDBView }"
         :title="t('view.database')"
-        @click="view = 'db'"
+        @click="switchView('db')"
       >▤</button>
     </span>
     <n-popover trigger="click" placement="bottom-start">

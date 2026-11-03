@@ -28,8 +28,9 @@ import TerminalTabs from './components/TerminalTabs.vue'
 import FilePanel from './components/FilePanel.vue'
 import MonitorPanel from './components/MonitorPanel.vue'
 
-// 模块级 ref 需在 setup 内引用才会在模板中解包
-const view = mainView
+// 注意：模板无法自动解包 import 进来的 ref（编译器识别不了其类型），
+// 必须用本地 computed 包装后再在模板中使用
+const isDBView = computed(() => mainView.value === 'db')
 
 // 子组件渲染异常时把错误显示出来（否则整块区域静默空白，难以排查）
 const renderError = ref('')
@@ -81,7 +82,7 @@ onMounted(async () => {
             <div class="content-row">
               <div class="term-area">
                 <div v-if="renderError" class="render-error">{{ renderError }}</div>
-                <DBView v-else-if="view === 'db'" class="db-area" />
+                <DBView v-else-if="isDBView" class="db-area" />
                 <TerminalTabs v-else-if="terminals.tabs.length > 0" />
                 <div v-else class="hero">
                   <h1 class="brand">Panoramix</h1>
@@ -92,7 +93,7 @@ onMounted(async () => {
                   <p class="hint">{{ t('app.m2Hint') }}</p>
                 </div>
               </div>
-              <template v-if="view === 'terminal'">
+              <template v-if="!isDBView">
                 <FilePanel v-if="files.showPanel && terminals.tabs.length > 0" class="files-area dual" />
                 <MonitorPanel v-else-if="monitor.showPanel && terminals.tabs.length > 0" class="files-area" />
               </template>

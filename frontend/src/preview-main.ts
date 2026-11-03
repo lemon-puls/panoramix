@@ -54,6 +54,16 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
       mtime: new Date().toISOString(),
     })),
   ListTransfers: async () => [],
+  Ping: async () => 'pong',
+  IsSessionLogEnabled: async () => false,
+  SetSessionLogEnabled: async () => undefined,
+  IsCwdSyncEnabled: async () => false,
+  SetCwdSyncEnabled: async () => undefined,
+  GetTransferSpeedLimit: async () => 0,
+  SetTransferSpeedLimit: async () => undefined,
+  ListGroups: async () => [],
+  ListHosts: async () => [],
+  ListSnippets: async () => [],
   ListDBConns: async () => [
     { id: 'mysql-1', name: '本地 MySQL', kind: 'mysql', addr: '127.0.0.1', port: 3306, username: 'root', dbName: 'demo', hasSecret: true, sort: 0 },
     { id: 'redis-1', name: '本地 Redis', kind: 'redis', addr: '127.0.0.1', port: 6379, username: '', dbName: '0', hasSecret: true, sort: 1 },
@@ -90,20 +100,45 @@ function emit(name: string, payload: unknown) {
 }
 
 async function main() {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const { i18n, setLocale } = await import('./i18n')
+  const lang = new URLSearchParams(location.search).get('locale')
+  if (lang === 'en-US') setLocale('en-US')
   const { useTerminalsStore } = await import('./stores/terminals')
   const { useFilesStore } = await import('./stores/files')
-  const panel = new URLSearchParams(location.search).get('panel')
+  const params = new URLSearchParams(location.search)
+  if (params.get('app') === '1') {
+    const { default: AppRoot } = await import('./App.vue')
+    const { mainView } = await import('./stores/view')
+    if (params.get('db') === '1') mainView.value = 'db'
+    const appRoot = createApp({
+      render: () =>
+        h(NConfigProvider, { theme: darkTheme, locale: zhCN, dateLocale: dateZhCN }, {
+          default: () =>
+            h(NMessageProvider, null, {
+              default: () => h(NDialogProvider, null, { default: () => h(AppRoot) }),
+            }),
+        }),
+    })
+    appRoot.use(pinia)
+    appRoot.use(i18n)
+    appRoot.config.errorHandler = (err) => {
+      const el = document.createElement('pre')
+      el.id = 'preview-error'
+      el.style.cssText = 'color:#e88080;padding:16px;white-space:pre-wrap;font-size:12px'
+      el.textContent = 'RENDER ERROR: ' + (err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? ''}` : String(err))
+      document.body.appendChild(el)
+    }
+    appRoot.mount('#app')
+    return
+  }
+  const panel = params.get('panel')
   const { default: Component } = panel === 'files'
     ? await import('./components/FilePanel.vue')
     : panel === 'db'
       ? await import('./components/DBView.vue')
       : await import('./components/MonitorPanel.vue')
-  const { i18n, setLocale } = await import('./i18n')
-  const lang = new URLSearchParams(location.search).get('locale')
-  if (lang === 'en-US') setLocale('en-US')
-
-  const pinia = createPinia()
-  setActivePinia(pinia)
   const terminals = useTerminalsStore()
   terminals.tabs.push({
     id: 'preview-tab',
