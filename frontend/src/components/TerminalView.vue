@@ -146,7 +146,7 @@ onMounted(() => {
     fontFamily: 'Consolas, "Microsoft YaHei Mono", "Courier New", monospace',
     cursorBlink: true,
     scrollback: 5000,
-    theme: { background: '#18181c', foreground: '#d4d4d4' },
+    theme: { background: 'var(--bg-app)', foreground: '#d4d4d4' },
   })
   fit = new FitAddon()
   searchAddon = new SearchAddon()
@@ -327,7 +327,7 @@ onBeforeUnmount(() => {
   background: rgba(40, 40, 48, 0.96);
   padding: 4px;
   border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--border);
 }
 .search-bar :deep(.n-input) {
   width: 180px;
@@ -345,7 +345,7 @@ onBeforeUnmount(() => {
 }
 .overlay.warn {
   background: rgba(10, 10, 14, 0.35);
-  color: #f0c674;
+  color: var(--warning);
 }
 .close-btn {
   min-width: 88px;

@@ -104,9 +104,9 @@ const topProcs = computed(() => (now.value?.processes ?? []).slice(0, 8))
 
 // 磁盘颜色：>85% 危险红，>70% 警告橙，其余青绿
 function diskColor(pct: number): string {
-  if (pct >= 85) return '#e88080'
-  if (pct >= 70) return '#f0a020'
-  return '#63e2b7'
+  if (pct >= 85) return 'var(--danger)'
+  if (pct >= 70) return 'var(--warning)'
+  return 'var(--accent)'
 }
 </script>
 
@@ -130,13 +130,13 @@ function diskColor(pct: number): string {
         <div class="card">
           <div class="card-head">
             <span class="card-label">CPU</span>
-            <span class="card-value" style="color: #63e2b7">
+            <span class="card-value" style="color: var(--accent)">
               {{ (now?.cpu.percent ?? 0).toFixed(1) }}<small>%</small>
             </span>
           </div>
           <Sparkline
             :labels="labels"
-            :series="[{ label: 'CPU', values: cpuSeries, color: '#63e2b7' }]"
+            :series="[{ label: 'CPU', values: cpuSeries, color: 'var(--accent)' }]"
             :y-max="100"
             :height="46"
             unit="%"
@@ -163,14 +163,14 @@ function diskColor(pct: number): string {
             <span class="card-label">{{ t('monitor.network') }}</span>
             <span class="legend">
               <i style="background: #36ad6a" />↓
-              <i style="background: #f0a020" />↑
+              <i style="background: var(--warning)" />↑
             </span>
           </div>
           <Sparkline
             :labels="labels"
             :series="[
               { label: '↓', values: netIn, color: '#36ad6a' },
-              { label: '↑', values: netOut, color: '#f0a020' },
+              { label: '↑', values: netOut, color: 'var(--warning)' },
             ]"
             :height="46"
             unit=" KB/s"
@@ -229,7 +229,7 @@ function diskColor(pct: number): string {
         <div v-for="g in now!.gpu" :key="g.index" class="gpu">
           <div class="gpu-line1">
             <span class="gpu-name">{{ g.name }}</span>
-            <span class="gpu-temp" :style="{ color: g.tempC > 80 ? '#e88080' : '#f0c674' }">
+            <span class="gpu-temp" :style="{ color: g.tempC > 80 ? 'var(--danger)' : 'var(--warning)' }">
               {{ g.tempC.toFixed(0) }}°C
             </span>
           </div>
@@ -297,8 +297,8 @@ function diskColor(pct: number): string {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #63e2b7;
-  box-shadow: 0 0 6px #63e2b7;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
   animation: pulse 2s ease-in-out infinite;
 }
 .dot.off {
@@ -324,7 +324,7 @@ function diskColor(pct: number): string {
   padding: 6px 10px;
   border-radius: 6px;
   background: rgba(240, 198, 116, 0.1);
-  color: #f0c674;
+  color: var(--warning);
   font-size: 11px;
 }
 
@@ -336,7 +336,7 @@ function diskColor(pct: number): string {
 }
 .card {
   background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--bg-hover);
   border-radius: 8px;
   padding: 8px 9px 6px;
   overflow: hidden;
@@ -395,7 +395,7 @@ function diskColor(pct: number): string {
 /* ---------- 区块 ---------- */
 .block {
   background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--bg-hover);
   border-radius: 8px;
   padding: 8px 10px;
 }

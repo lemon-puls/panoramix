@@ -103,7 +103,7 @@ const menuOptions = computed<DropdownOption[]>(() => {
       { label: t('menu.moveUp'), key: 'groupUp', disabled: !canMove(node, -1) },
       { label: t('menu.moveDown'), key: 'groupDown', disabled: !canMove(node, 1) },
       { type: 'divider', key: 'd2' },
-      { label: t('menu.delete'), key: 'deleteGroup', props: { style: 'color: #e88080' } },
+      { label: t('menu.delete'), key: 'deleteGroup', props: { style: 'color: var(--danger)' } },
     ]
   }
   return [
@@ -115,7 +115,7 @@ const menuOptions = computed<DropdownOption[]>(() => {
     { label: t('menu.moveUp'), key: 'hostUp', disabled: !canMove(node, -1) },
     { label: t('menu.moveDown'), key: 'hostDown', disabled: !canMove(node, 1) },
     { type: 'divider', key: 'd2' },
-    { label: t('menu.delete'), key: 'deleteHost', props: { style: 'color: #e88080' } },
+    { label: t('menu.delete'), key: 'deleteHost', props: { style: 'color: var(--danger)' } },
   ]
 })
 
@@ -396,8 +396,8 @@ function renderSuffix({ option }: { option: TreeOption }) {
 .conn-tree {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px;
+  gap: var(--gap-sm);
+  padding: 10px;
   height: 100%;
 }
 .toolbar {
@@ -409,9 +409,11 @@ function renderSuffix({ option }: { option: TreeOption }) {
   overflow: auto;
 }
 .section-title {
-  margin-top: 8px;
-  font-size: 12px;
-  opacity: 0.6;
+  margin-top: 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
 }
 .recent {
   display: flex;
@@ -421,13 +423,16 @@ function renderSuffix({ option }: { option: TreeOption }) {
 .recent-item {
   display: flex;
   justify-content: space-between;
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: background 0.12s ease, color 0.12s ease;
 }
 .recent-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 .recent-name {
   overflow: hidden;

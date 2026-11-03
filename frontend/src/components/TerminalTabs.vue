@@ -107,7 +107,7 @@ function tabLabel(tabId: string): string {
   height: 100%;
 }
 .tab-label {
-  font-size: 13px;
+  font-size: 12px;
 }
 .tab-label.closed {
   opacity: 0.45; /* 断线标签置灰（M2 验收项） */
@@ -138,16 +138,16 @@ function tabLabel(tabId: string): string {
   position: relative;
 }
 .panes.row .pane + .pane {
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 1px solid var(--border);
 }
 .panes.column .pane + .pane {
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid var(--border);
 }
 .pane.active::after {
   content: '';
   position: absolute;
   inset: 0;
-  border: 1px solid rgba(99, 226, 183, 0.35);
+  border: 1px solid rgba(94, 234, 212, 0.4);
   pointer-events: none;
 }
 .pane-bar {

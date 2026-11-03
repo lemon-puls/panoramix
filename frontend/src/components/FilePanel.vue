@@ -88,14 +88,14 @@ const menuOptions = computed(() => {
       { label: t('files.open'), key: 'open' },
       { label: t('files.download'), key: 'download' },
       { label: t('menu.rename'), key: 'rename' },
-      { label: t('menu.delete'), key: 'remove', props: { style: 'color: #e88080' } },
+      { label: t('menu.delete'), key: 'remove', props: { style: 'color: var(--danger)' } },
     ]
   }
   return [
     { label: t('files.edit'), key: 'edit' },
     { label: t('files.download'), key: 'download' },
     { label: t('menu.rename'), key: 'rename' },
-    { label: t('menu.delete'), key: 'remove', props: { style: 'color: #e88080' } },
+    { label: t('menu.delete'), key: 'remove', props: { style: 'color: var(--danger)' } },
   ]
 })
 
@@ -607,7 +607,7 @@ function fmtMtime(v: unknown): string {
   flex-direction: column;
 }
 .pane + .pane {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--border-subtle);
   padding-top: 6px;
 }
 .pane-title {
@@ -653,7 +653,7 @@ function fmtMtime(v: unknown): string {
   cursor: pointer;
 }
 .crumb:hover {
-  color: #63e2b7;
+  color: var(--accent);
 }
 .sep {
   margin: 0 4px;
@@ -679,7 +679,7 @@ function fmtMtime(v: unknown): string {
   font-size: 13px;
 }
 .row:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-hover);
 }
 .icon {
   width: 18px;
@@ -693,7 +693,7 @@ function fmtMtime(v: unknown): string {
   white-space: nowrap;
 }
 .name.dir {
-  color: #63e2b7;
+  color: var(--accent);
 }
 .size {
   width: 70px;
@@ -716,7 +716,7 @@ function fmtMtime(v: unknown): string {
   flex-shrink: 0;
   max-height: 170px;
   overflow: auto;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--border-subtle);
   padding-top: 6px;
 }
 .transfers-head {
@@ -755,22 +755,22 @@ function fmtMtime(v: unknown): string {
   font-size: 11px;
 }
 .tstate.done {
-  color: #63e2b7;
+  color: var(--accent);
 }
 .tstate.failed {
-  color: #e88080;
+  color: var(--danger);
 }
 .tstate.canceled,
 .tstate.skipped {
   opacity: 0.5;
 }
 .tstate.paused {
-  color: #f0c674;
+  color: var(--warning);
 }
 .tresume {
   margin-left: 4px;
   font-size: 10px;
-  color: #f0c674;
+  color: var(--warning);
 }
 .tops {
   width: 16px;
@@ -784,22 +784,22 @@ function fmtMtime(v: unknown): string {
 }
 .bar {
   height: 3px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--border);
   border-radius: 2px;
   margin-top: 2px;
 }
 .bar-fill {
   height: 100%;
-  background: #63e2b7;
+  background: var(--accent);
   border-radius: 2px;
   transition: width 0.2s;
 }
 .bar-fill.failed {
-  background: #e88080;
+  background: var(--danger);
 }
 .terr {
   font-size: 11px;
-  color: #e88080;
+  color: var(--danger);
   opacity: 0.8;
 }
 .modal-actions {

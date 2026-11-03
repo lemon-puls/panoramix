@@ -151,7 +151,7 @@ function authLabel(p: app.ImportPreview): string {
   padding: 0 4px;
   border-radius: 3px;
   background: rgba(99, 226, 183, 0.15);
-  color: #63e2b7;
+  color: var(--accent);
   font-size: 10px;
 }
 .warning {
@@ -159,7 +159,7 @@ function authLabel(p: app.ImportPreview): string {
   padding: 8px 12px;
   border-radius: 4px;
   background: rgba(240, 198, 116, 0.12);
-  color: #f0c674;
+  color: var(--warning);
   font-size: 12px;
 }
 .step {
@@ -191,7 +191,7 @@ function authLabel(p: app.ImportPreview): string {
   font-size: 13px;
 }
 .row:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-hover);
 }
 .row.invalid {
   opacity: 0.45;

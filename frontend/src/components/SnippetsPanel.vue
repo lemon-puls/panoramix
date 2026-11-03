@@ -183,7 +183,7 @@ function askDelete(sn: models.store.Snippet) {
   cursor: pointer;
 }
 .item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-hover);
 }
 .item.disabled {
   opacity: 0.45;
@@ -211,7 +211,7 @@ function askDelete(sn: models.store.Snippet) {
   opacity: 1;
 }
 .op.danger {
-  color: #e88080;
+  color: var(--danger);
 }
 .item-content {
   font-size: 11px;
