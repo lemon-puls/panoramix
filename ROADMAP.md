@@ -75,9 +75,14 @@
 
 ## v0.3 —— 数据库与 Redis
 
-- ✅ MySQL：连接管理（keychain 存密码）、库/表树（information_schema 行数估算）、
-  表结构（列定义 + DDL）、双击表生成 SELECT、SQL 编辑器、结果网格
-  （1000 行上限、点击表头排序、单元格复制、导出 CSV、查询历史）、**不自动 COUNT**
+- ✅ MySQL（HeidiSQL 式多标签工作区）：
+  · 连接管理（keychain 存密码）、库/表树（information_schema 行数估算）
+  · **数据标签**（双击表）：默认 1000 条、WHERE 片段筛选、服务端排序、
+    分页（100/500/1000/5000）、导出 CSV
+  · **查询标签**（＋新建，可多开）：SQL 编辑器、Ctrl+Enter 执行、结果网格
+    （本地排序/复制/导出）、查询历史
+  · **结构标签**（单击表）：列定义与 DDL
+  · **不自动 COUNT**（大表会卡死）
 - ✅ Redis：SCAN 渐进（禁 `KEYS *`）、**键树按 `:` 分层**（树形/平铺切换）、
   TTL 查看/修改、string/hash/list/set/zset 查看器、string 值编辑、删键、大 value 截断
 - 待办：SQL 编辑器语法高亮与补全（CodeMirror 6，依赖安装受 WSL/Windows 共用
