@@ -15,6 +15,7 @@ export default {
     m2Hint: '双击左侧主机连接 SSH；右键主机编辑/克隆；底部面板管理命令片段。',
   },
   tree: {
+    connectionsTitle: '连接',
     newHost: '新建主机',
     newGroup: '新建分组',
     searchPlaceholder: '搜索名称或地址',

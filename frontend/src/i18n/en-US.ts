@@ -16,6 +16,7 @@ export default {
       'Double-click a host to connect. Right-click for edit/clone. Manage snippets in the bottom panel.',
   },
   tree: {
+    connectionsTitle: 'Connections',
     newHost: 'New Host',
     newGroup: 'New Group',
     searchPlaceholder: 'Search name or address',

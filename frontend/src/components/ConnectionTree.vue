@@ -325,17 +325,42 @@ function renderSuffix({ option }: { option: TreeOption }) {
 
 <template>
   <div class="conn-tree">
-    <div class="toolbar">
-      <n-button size="small" dashed @click="newRootHost">{{ t('tree.newHost') }}</n-button>
-      <n-button size="small" dashed @click="newRootGroup">{{ t('tree.newGroup') }}</n-button>
-      <n-button size="small" dashed @click="importModal = true">{{ t('import.title') }}</n-button>
+    <div class="tree-head">
+      <span class="head-label">{{ t('tree.connectionsTitle') }}</span>
+      <div class="head-actions">
+        <button class="hbtn primary" :title="t('tree.newHost')" @click="newRootHost">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <line x1="12" y1="9" x2="12" y2="15" /><line x1="9" y1="12" x2="15" y2="12" />
+          </svg>
+        </button>
+        <button class="hbtn" :title="t('tree.newGroup')" @click="newRootGroup">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            <line x1="12" y1="11" x2="12" y2="17" /><line x1="9" y1="14" x2="15" y2="14" />
+          </svg>
+        </button>
+        <button class="hbtn" :title="t('import.title')" @click="importModal = true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </button>
+      </div>
     </div>
     <n-input
       v-model:value="search"
       size="small"
       clearable
       :placeholder="t('tree.searchPlaceholder')"
-    />
+      class="search-input"
+    >
+      <template #prefix>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-muted)">
+          <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+      </template>
+    </n-input>
     <n-spin :show="store.loading" size="small">
       <n-tree
         :data="treeData"
@@ -396,17 +421,70 @@ function renderSuffix({ option }: { option: TreeOption }) {
 .conn-tree {
   display: flex;
   flex-direction: column;
-  gap: var(--gap-sm);
-  padding: 10px;
+  gap: 10px;
+  padding: 12px 10px;
   height: 100%;
+  background: var(--bg-panel);
 }
-.toolbar {
+.tree-head {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px;
+}
+.head-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.head-actions {
+  display: flex;
+  gap: 2px;
+}
+.hbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.hbtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+.hbtn.primary {
+  color: var(--accent);
+}
+.hbtn.primary:hover {
+  background: var(--accent-soft);
+  border-color: rgba(94, 234, 212, 0.3);
+}
+.search-input :deep(.n-input__prefix) {
+  color: var(--text-muted);
 }
 .tree {
   flex: 1;
+  min-height: 0;
   overflow: auto;
+}
+.tree :deep(.n-tree-node-content) {
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+}
+.tree :deep(.n-tree-node-content__text) {
+  color: var(--text-secondary);
+}
+.tree :deep(.n-tree-node--selected .n-tree-node-content__text) {
+  color: var(--accent);
 }
 .section-title {
   margin-top: 10px;

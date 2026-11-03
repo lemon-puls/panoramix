@@ -197,6 +197,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  background: var(--bg-panel);
 }
 .tree-area {
   flex: 1;

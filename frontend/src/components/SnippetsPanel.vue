@@ -154,8 +154,9 @@ function askDelete(sn: models.store.Snippet) {
 .snippets {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 12px 12px;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  background: var(--bg-panel);
 }
 .head {
   display: flex;
@@ -163,12 +164,16 @@ function askDelete(sn: models.store.Snippet) {
   align-items: center;
 }
 .head-title {
-  font-size: 12px;
-  opacity: 0.6;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  font-weight: 600;
 }
 .empty {
-  font-size: 12px;
-  opacity: 0.4;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 4px 2px;
 }
 .list {
   display: flex;
@@ -178,9 +183,10 @@ function askDelete(sn: models.store.Snippet) {
   overflow: auto;
 }
 .item {
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background 0.12s ease;
 }
 .item:hover {
   background: var(--bg-hover);
@@ -194,7 +200,8 @@ function askDelete(sn: models.store.Snippet) {
   align-items: center;
 }
 .item-name {
-  font-size: 13px;
+  font-size: 12px;
+  color: var(--text-primary);
 }
 .item-ops {
   display: none;
@@ -215,7 +222,7 @@ function askDelete(sn: models.store.Snippet) {
 }
 .item-content {
   font-size: 11px;
-  opacity: 0.45;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
