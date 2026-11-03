@@ -139,22 +139,27 @@ async function toggleDb(db: string) {
 }
 
 // 单击表 → 打开结构标签（已存在则激活）
+// 结构标签全局复用一个（单击多种表不会堆出大量标签）
 async function openTableStructure(db: string, table: models.db.TableInfo) {
   const id = activeId.value
-  const exist = tabs.value.find(
-    (x) => x.kind === 'structure' && x.connId === id && x.database === db && x.table === table.name,
-  )
-  if (exist) {
-    activeTabId.value = exist.id
-    return
+  let tab = tabs.value.find((x) => x.kind === 'structure' && x.connId === id)
+  if (tab) {
+    tab.database = db
+    tab.table = table.name
+    tab.title = `${table.name} · ${t('db.structureShort')}`
+    tab.showDDL = false
+    tab.ddl = ''
+    tab.error = ''
+    activeTabId.value = tab.id
+  } else {
+    tab = newTab('structure', {
+      title: `${table.name} · ${t('db.structureShort')}`,
+      database: db,
+      table: table.name,
+    })
+    tabs.value.push(tab)
+    activeTabId.value = tab.id
   }
-  const tab = newTab('structure', {
-    title: `${table.name} · ${t('db.structureShort')}`,
-    database: db,
-    table: table.name,
-  })
-  tabs.value.push(tab)
-  activeTabId.value = tab.id
   try {
     tab.columns = (await DBDescribeTable(id, db, table.name)) ?? []
   } catch (e) {
@@ -213,8 +218,10 @@ const tabs = ref<WorkTab[]>([])
 const activeTabId = ref('')
 const activeTab = computed(() => tabs.value.find((x) => x.id === activeTabId.value) ?? null)
 
+// 必须返回 reactive 对象：ref 数组中的元素若被外部原始引用修改，
+// 不会触发 Vue 更新（loading 永远停在 true 的根因）
 function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
-  return {
+  return reactive({
     id: `tab-${++tabSeq}`,
     kind,
     title: '',
@@ -238,7 +245,7 @@ function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
     selectedRow: -1,
     selectedCol: -1,
     ...init,
-  }
+  })
 }
 
 function openQuery() {
