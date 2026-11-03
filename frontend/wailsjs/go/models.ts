@@ -206,6 +206,46 @@ export namespace db {
 	        this.comment = source["comment"];
 	    }
 	}
+	export class ForeignKeyInfo {
+	    name: string;
+	    column: string;
+	    refTable: string;
+	    refColumn: string;
+	    onUpdate: string;
+	    onDelete: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ForeignKeyInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.column = source["column"];
+	        this.refTable = source["refTable"];
+	        this.refColumn = source["refColumn"];
+	        this.onUpdate = source["onUpdate"];
+	        this.onDelete = source["onDelete"];
+	    }
+	}
+	export class IndexInfo {
+	    name: string;
+	    type: string;
+	    unique: boolean;
+	    columns: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new IndexInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.type = source["type"];
+	        this.unique = source["unique"];
+	        this.columns = source["columns"];
+	    }
+	}
 	export class KeyInfo {
 	    key: string;
 	    ttl: number;
@@ -272,6 +312,34 @@ export namespace db {
 	        this.affected = source["affected"];
 	        this.durationMs = source["durationMs"];
 	        this.truncated = source["truncated"];
+	    }
+	}
+	export class TableMeta {
+	    name: string;
+	    engine: string;
+	    collation: string;
+	    comment: string;
+	    createTime: string;
+	    rows: number;
+	    dataLength: number;
+	    indexLength: number;
+	    autoIncrement: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TableMeta(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.engine = source["engine"];
+	        this.collation = source["collation"];
+	        this.comment = source["comment"];
+	        this.createTime = source["createTime"];
+	        this.rows = source["rows"];
+	        this.dataLength = source["dataLength"];
+	        this.indexLength = source["indexLength"];
+	        this.autoIncrement = source["autoIncrement"];
 	    }
 	}
 	export class TableInfo {

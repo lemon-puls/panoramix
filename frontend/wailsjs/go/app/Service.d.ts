@@ -14,7 +14,13 @@ export function DBDescribeTable(arg1:string,arg2:string,arg3:string):Promise<Arr
 
 export function DBListDatabases(arg1:string):Promise<Array<string>>;
 
+export function DBListForeignKeys(arg1:string,arg2:string,arg3:string):Promise<Array<db.ForeignKeyInfo>>;
+
+export function DBListIndexes(arg1:string,arg2:string,arg3:string):Promise<Array<db.IndexInfo>>;
+
 export function DBListTables(arg1:string,arg2:string):Promise<Array<db.TableInfo>>;
+
+export function DBTableMeta(arg1:string,arg2:string,arg3:string):Promise<db.TableMeta>;
 
 export function DBQuery(arg1:string,arg2:string,arg3:number):Promise<db.Result>;
 

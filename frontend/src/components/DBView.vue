@@ -6,9 +6,12 @@ import { NButton, NInput, NInputNumber } from 'naive-ui'
 import {
   DBDescribeTable,
   DBListDatabases,
+  DBListForeignKeys,
+  DBListIndexes,
   DBListTables,
   DBQuery,
   DBShowCreateTable,
+  DBTableMeta,
   DeleteDBConn,
   ListDBConns,
   RedisDeleteKey,
@@ -150,6 +153,7 @@ async function openTableStructure(db: string, table: models.db.TableInfo) {
     tab.showDDL = false
     tab.ddl = ''
     tab.error = ''
+    tab.structView = 'basic'
     activeTabId.value = tab.id
   } else {
     tab = newTab('structure', {
@@ -160,10 +164,28 @@ async function openTableStructure(db: string, table: models.db.TableInfo) {
     tabs.value.push(tab)
     activeTabId.value = tab.id
   }
+  await loadTableStructure(tab)
+}
+
+// 加载表结构（列/基本信息/索引/外键）
+async function loadTableStructure(tab: WorkTab) {
+  tab.loading = true
+  tab.error = ''
   try {
-    tab.columns = (await DBDescribeTable(id, db, table.name)) ?? []
+    const [cols, meta, idx, fks] = await Promise.all([
+      DBDescribeTable(tab.connId, tab.database, tab.table),
+      DBTableMeta(tab.connId, tab.database, tab.table).catch(() => null),
+      DBListIndexes(tab.connId, tab.database, tab.table).catch(() => []),
+      DBListForeignKeys(tab.connId, tab.database, tab.table).catch(() => []),
+    ])
+    tab.columns = cols ?? []
+    tab.meta = meta
+    tab.indexes = idx ?? []
+    tab.foreignKeys = fks ?? []
   } catch (e) {
     tab.error = String(e)
+  } finally {
+    tab.loading = false
   }
 }
 
@@ -205,6 +227,10 @@ interface WorkTab {
   error: string
   loading: boolean
   columns: models.db.ColumnInfo[]
+  meta: models.db.TableMeta | null
+  indexes: models.db.IndexInfo[]
+  foreignKeys: models.db.ForeignKeyInfo[]
+  structView: 'basic' | 'indexes' | 'fks' | 'ddl'
   ddl: string
   showDDL: boolean
   gridSortCol: number
@@ -238,6 +264,10 @@ function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
     error: '',
     loading: false,
     columns: [],
+    meta: null,
+    indexes: [],
+    foreignKeys: [],
+    structView: 'basic',
     ddl: '',
     showDDL: false,
     gridSortCol: -1,
@@ -610,6 +640,18 @@ async function refreshSelected() {
   redisValue.value = await RedisGetValue(active.value.id, redisSelected.value)
 }
 
+function formatBytes(n: number): string {
+  if (!n) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[i]}`
+}
+
 function fmtTTL(ttl: number): string {
   if (ttl === -2) return t('db.ttlGone')
   if (ttl < 0) return t('db.ttlNone')
@@ -962,109 +1004,183 @@ void load()
           </div>
         </template>
 
-        <!-- 结构标签 -->
+        <!-- 结构标签：基本 / 索引 / 外键 / DDL -->
         <template v-else>
-          <div class="toolbar">
-            <span class="ctx">{{ activeTab.database }} · {{ activeTab.table }}</span>
+          <div class="toolbar struct-toolbar">
+            <span class="ctx">{{ activeTab.database }}.{{ activeTab.table }}</span>
+            <div class="sub-tabs">
+              <button
+                class="sub-tab"
+                :class="{ active: activeTab.structView === 'basic' }"
+                @click="activeTab.structView = 'basic'"
+              >
+                {{ t('db.tabBasic') }}
+              </button>
+              <button
+                class="sub-tab"
+                :class="{ active: activeTab.structView === 'indexes' }"
+                @click="activeTab.structView = 'indexes'"
+              >
+                {{ t('db.tabIndexes') }} ({{ activeTab.indexes.length }})
+              </button>
+              <button
+                class="sub-tab"
+                :class="{ active: activeTab.structView === 'fks' }"
+                @click="activeTab.structView = 'fks'"
+              >
+                {{ t('db.tabForeignKeys') }} ({{ activeTab.foreignKeys.length }})
+              </button>
+              <button
+                class="sub-tab"
+                :class="{ active: activeTab.structView === 'ddl' }"
+                @click="loadDDL(activeTab); activeTab.structView = 'ddl'"
+              >
+                DDL
+              </button>
+            </div>
             <span class="spacer" />
-            <n-button size="small" @click="loadDDL(activeTab)">{{ t('db.showDDL') }}</n-button>
-            <n-button size="small" :disabled="!activeTab.showDDL" @click="activeTab.showDDL = false">
-              {{ t('db.colsView') }}
+            <n-button size="small" :loading="activeTab.loading" @click="loadTableStructure(activeTab)">
+              {{ t('db.refresh') }}
             </n-button>
           </div>
+
           <div class="result">
             <div v-if="activeTab.error" class="query-error">{{ activeTab.error }}</div>
-            <pre v-else-if="activeTab.showDDL" class="ddl">{{ activeTab.ddl }}</pre>
-            <div v-else class="grid-wrap">
-              <table class="grid">
-                <thead>
-                  <tr>
-                    <th>{{ t('db.colField') }}</th>
-                    <th>{{ t('db.colType') }}</th>
-                    <th>{{ t('db.colNull') }}</th>
-                    <th>{{ t('db.colKey') }}</th>
-                    <th>{{ t('db.colDefault') }}</th>
-                    <th>{{ t('db.colExtra') }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="col in activeTab.columns" :key="col.field">
-                    <td class="mono">{{ col.field }}</td>
-                    <td class="mono">{{ col.type }}</td>
-                    <td>{{ col.null }}</td>
-                    <td>{{ col.key }}</td>
-                    <td class="mono">{{ col.default ?? 'NULL' }}</td>
-                    <td>{{ col.extra }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </template>
-      </template>
 
-      <!-- Redis 值查看器 -->
-      <template v-else>
-        <div class="value">
-          <div v-if="!redisValue" class="result-empty">{{ t('db.pickKey') }}</div>
-          <template v-else>
-            <div class="value-head">
-              <span class="value-type" :style="{ color: typeColors[redisValue.type] ?? '#888' }">
-                {{ redisValue.type }}
-              </span>
-              <span class="value-key">{{ redisValue.key }}</span>
-              <span class="spacer" />
-              <span class="ttl-label">{{ t('db.ttl') }}</span>
-              <n-input-number v-model:value="ttlInput" size="tiny" :min="0" style="width: 100px" />
-              <n-button size="tiny" @click="saveTTL">{{ t('common.save') }}</n-button>
-              <n-button size="tiny" type="error" quaternary @click="deleteKey">
-                {{ t('common.delete') }}
-              </n-button>
-            </div>
-            <div v-if="redisValue.truncated" class="warn-line">
-              {{ t('db.truncatedValue', { n: redisValue.total }) }}
-            </div>
-
-            <template v-if="redisValue.type === 'string'">
-              <div v-if="!editingValue" class="str-value">
-                <pre>{{ redisValue.str }}</pre>
-                <n-button size="tiny" class="edit-btn" @click="editingValue = true">
-                  {{ t('menu.edit') }}
-                </n-button>
-              </div>
-              <div v-else class="str-edit">
-                <textarea v-model="editValue" class="str-editor" spellcheck="false" />
-                <div class="str-actions">
-                  <n-button size="tiny" @click="editingValue = false">{{ t('common.cancel') }}</n-button>
-                  <n-button size="tiny" type="primary" @click="saveStringValue">{{ t('common.save') }}</n-button>
+            <!-- 基本 -->
+            <div v-else-if="activeTab.structView === 'basic'" class="struct-body">
+              <div class="meta-grid">
+                <div class="meta-row">
+                  <span class="meta-k">{{ t('db.metaName') }}</span>
+                  <span class="meta-v mono">{{ activeTab.table }}</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-k">{{ t('db.metaEngine') }}</span>
+                  <span class="meta-v">{{ activeTab.meta?.engine || '—' }}</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-k">{{ t('db.metaCollation') }}</span>
+                  <span class="meta-v">{{ activeTab.meta?.collation || '—' }}</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-k">{{ t('db.metaRows') }}</span>
+                  <span class="meta-v">{{ activeTab.meta?.rows ?? '—' }}</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-k">{{ t('db.metaSize') }}</span>
+                  <span class="meta-v">{{ formatBytes((activeTab.meta?.dataLength ?? 0) + (activeTab.meta?.indexLength ?? 0)) }}</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-k">{{ t('db.metaAutoInc') }}</span>
+                  <span class="meta-v">{{ activeTab.meta?.autoIncrement || '—' }}</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-k">{{ t('db.metaCreated') }}</span>
+                  <span class="meta-v">{{ activeTab.meta?.createTime || '—' }}</span>
+                </div>
+                <div class="meta-row wide">
+                  <span class="meta-k">{{ t('db.metaComment') }}</span>
+                  <span class="meta-v">{{ activeTab.meta?.comment || '—' }}</span>
                 </div>
               </div>
-            </template>
 
-            <div v-else-if="redisValue.type === 'hash'" class="kv-table">
-              <div v-for="(v, k) in redisValue.hash" :key="k" class="kv-row">
-                <span class="kv-key">{{ k }}</span>
-                <span class="kv-val">{{ v }}</span>
+              <div class="section-label">{{ t('db.columnsSection', { n: activeTab.columns.length }) }}</div>
+              <div class="grid-wrap">
+                <table class="grid">
+                  <thead>
+                    <tr>
+                      <th class="rownum">#</th>
+                      <th>{{ t('db.colField') }}</th>
+                      <th>{{ t('db.colType') }}</th>
+                      <th>{{ t('db.colNull') }}</th>
+                      <th>{{ t('db.colKey') }}</th>
+                      <th>{{ t('db.colDefault') }}</th>
+                      <th>{{ t('db.colExtra') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(col, i) in activeTab.columns" :key="col.field">
+                      <td class="rownum">{{ i + 1 }}</td>
+                      <td class="mono strong">{{ col.field }}</td>
+                      <td class="mono type">{{ col.type }}</td>
+                      <td>{{ col.null }}</td>
+                      <td>{{ col.key }}</td>
+                      <td class="mono">{{ col.default ?? 'NULL' }}</td>
+                      <td>{{ col.extra }}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            <div v-else-if="redisValue.type === 'list' || redisValue.type === 'set'" class="kv-table">
-              <div v-for="(v, i) in (redisValue.list ?? redisValue.set ?? [])" :key="i" class="kv-row">
-                <span class="kv-idx">{{ i }}</span>
-                <span class="kv-val">{{ v }}</span>
+            <!-- 索引 -->
+            <div v-else-if="activeTab.structView === 'indexes'" class="struct-body">
+              <div v-if="activeTab.indexes.length === 0" class="result-empty">
+                <div class="empty-glyph">◈</div>
+                <div>{{ t('db.noIndexes') }}</div>
+              </div>
+              <div v-else class="grid-wrap">
+                <table class="grid">
+                  <thead>
+                    <tr>
+                      <th>{{ t('db.idxName') }}</th>
+                      <th>{{ t('db.idxType') }}</th>
+                      <th>{{ t('db.idxUnique') }}</th>
+                      <th>{{ t('db.idxColumns') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="idx in activeTab.indexes" :key="idx.name">
+                      <td class="mono strong">{{ idx.name }}</td>
+                      <td>{{ idx.type }}</td>
+                      <td>
+                        <span class="pill" :class="idx.unique ? 'pill-accent' : ''">
+                          {{ idx.unique ? t('db.yes') : t('db.no') }}
+                        </span>
+                      </td>
+                      <td class="mono">{{ idx.columns.join(', ') }}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            <div v-else-if="redisValue.type === 'zset'" class="kv-table">
-              <div v-for="(m, i) in redisValue.zset" :key="i" class="kv-row">
-                <span class="kv-idx">{{ m.score }}</span>
-                <span class="kv-val">{{ m.member }}</span>
+            <!-- 外键 -->
+            <div v-else-if="activeTab.structView === 'fks'" class="struct-body">
+              <div v-if="activeTab.foreignKeys.length === 0" class="result-empty">
+                <div class="empty-glyph">⇄</div>
+                <div>{{ t('db.noForeignKeys') }}</div>
+              </div>
+              <div v-else class="grid-wrap">
+                <table class="grid">
+                  <thead>
+                    <tr>
+                      <th>{{ t('db.fkName') }}</th>
+                      <th>{{ t('db.fkColumn') }}</th>
+                      <th>{{ t('db.fkRefTable') }}</th>
+                      <th>{{ t('db.fkRefColumn') }}</th>
+                      <th>{{ t('db.fkOnUpdate') }}</th>
+                      <th>{{ t('db.fkOnDelete') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="fk in activeTab.foreignKeys" :key="fk.name + fk.column">
+                      <td class="mono strong">{{ fk.name }}</td>
+                      <td class="mono">{{ fk.column }}</td>
+                      <td class="mono">{{ fk.refTable }}</td>
+                      <td class="mono">{{ fk.refColumn }}</td>
+                      <td>{{ fk.onUpdate || '—' }}</td>
+                      <td>{{ fk.onDelete || '—' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
 
-            <div v-else class="result-empty">{{ t('db.unsupportedType', { type: redisValue.type }) }}</div>
-          </template>
-        </div>
+            <!-- DDL -->
+            <pre v-else class="ddl">{{ activeTab.ddl || t('db.loadingData') }}</pre>
+          </div>
+        </template>
       </template>
     </div>
 
@@ -1404,6 +1520,96 @@ void load()
   color: var(--danger);
   font-size: 12px;
   white-space: pre-wrap;
+}
+.struct-toolbar {
+  gap: var(--gap-sm);
+}
+.sub-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+}
+.sub-tab {
+  padding: 3px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.sub-tab:hover {
+  color: var(--text-primary);
+}
+.sub-tab.active {
+  background: var(--bg-elevated);
+  color: var(--accent);
+}
+.struct-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1px;
+  background: var(--border-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.meta-row {
+  display: flex;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-panel);
+  font-size: 12px;
+}
+.meta-row.wide {
+  grid-column: 1 / -1;
+}
+.meta-k {
+  color: var(--text-muted);
+  min-width: 76px;
+}
+.meta-v {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.section-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.grid td.strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.grid td.type {
+  color: var(--info);
+}
+.pill {
+  display: inline-block;
+  padding: 0 7px;
+  border-radius: 9px;
+  font-size: 10px;
+  background: var(--bg-app);
+  color: var(--text-muted);
+}
+.pill-accent {
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .result-empty {
   margin: auto;

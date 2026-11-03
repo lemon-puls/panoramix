@@ -940,6 +940,42 @@ func (s *Service) DBDescribeTable(id, database, table string) ([]db.ColumnInfo, 
 	return s.dbmgr.DescribeTable(c, pw, database, table)
 }
 
+// DBTableMeta 返回表基本信息
+func (s *Service) DBTableMeta(id, database, table string) (*db.TableMeta, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.dbmgr.TableMetaInfo(c, pw, database, table)
+}
+
+// DBListIndexes 列出索引
+func (s *Service) DBListIndexes(id, database, table string) ([]db.IndexInfo, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.dbmgr.ListIndexes(c, pw, database, table)
+}
+
+// DBListForeignKeys 列出外键
+func (s *Service) DBListForeignKeys(id, database, table string) ([]db.ForeignKeyInfo, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	return s.dbmgr.ListForeignKeys(c, pw, database, table)
+}
+
 // DBShowCreateTable 返回建表语句
 func (s *Service) DBShowCreateTable(id, database, table string) (string, error) {
 	if s.dbmgr == nil {

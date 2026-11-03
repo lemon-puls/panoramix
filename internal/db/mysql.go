@@ -351,6 +351,133 @@ func (m *Manager) DescribeTable(c store.DBConn, password, database, table string
 	return out, rows.Err()
 }
 
+// TableMeta 表基本信息（HeidiSQL「基本」标签）
+type TableMeta struct {
+	Name          string `json:"name"`
+	Engine        string `json:"engine"`
+	Collation     string `json:"collation"`
+	Comment       string `json:"comment"`
+	CreateTime    string `json:"createTime"`
+	Rows          int64  `json:"rows"`
+	DataLength    int64  `json:"dataLength"`
+	IndexLength   int64  `json:"indexLength"`
+	AutoIncrement int64  `json:"autoIncrement"`
+}
+
+// IndexInfo 索引（HeidiSQL「索引」标签）
+type IndexInfo struct {
+	Name    string   `json:"name"`
+	Type    string   `json:"type"`
+	Unique  bool     `json:"unique"`
+	Columns []string `json:"columns"`
+}
+
+// ForeignKeyInfo 外键（HeidiSQL「外键」标签）
+type ForeignKeyInfo struct {
+	Name      string `json:"name"`
+	Column    string `json:"column"`
+	RefTable  string `json:"refTable"`
+	RefColumn string `json:"refColumn"`
+	OnUpdate  string `json:"onUpdate"`
+	OnDelete  string `json:"onDelete"`
+}
+
+// TableMetaInfo 读取表基本信息
+func (m *Manager) TableMetaInfo(c store.DBConn, password, database, table string) (*TableMeta, error) {
+	db, err := m.Open(c, password)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	q := `SELECT TABLE_NAME, IFNULL(ENGINE,''), IFNULL(TABLE_COLLATION,''),
+		IFNULL(TABLE_COMMENT,''), IFNULL(DATE_FORMAT(CREATE_TIME,'%Y-%m-%d %H:%i:%s'),''),
+		IFNULL(TABLE_ROWS,0), IFNULL(DATA_LENGTH,0), IFNULL(INDEX_LENGTH,0), IFNULL(AUTO_INCREMENT,0)
+		FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?`
+	var meta TableMeta
+	err = db.QueryRowContext(ctx, q, database, table).Scan(
+		&meta.Name, &meta.Engine, &meta.Collation, &meta.Comment,
+		&meta.CreateTime, &meta.Rows, &meta.DataLength, &meta.IndexLength, &meta.AutoIncrement)
+	if err != nil {
+		return nil, fmt.Errorf("table meta: %w", err)
+	}
+	return &meta, nil
+}
+
+// ListIndexes 列出表索引（按索引名聚合列）
+func (m *Manager) ListIndexes(c store.DBConn, password, database, table string) ([]IndexInfo, error) {
+	db, err := m.Open(c, password)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	q := `SELECT INDEX_NAME, INDEX_TYPE, NON_UNIQUE, COLUMN_NAME
+		FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA=? AND TABLE_NAME=?
+		ORDER BY INDEX_NAME, SEQ_IN_INDEX`
+	rows, err := db.QueryContext(ctx, q, database, table)
+	if err != nil {
+		return nil, fmt.Errorf("list indexes: %w", err)
+	}
+	defer rows.Close()
+	byName := map[string]*IndexInfo{}
+	var order []string
+	for rows.Next() {
+		var name, typ, col string
+		var nonUnique int64
+		if err := rows.Scan(&name, &typ, &nonUnique, &col); err != nil {
+			return nil, err
+		}
+		idx, ok := byName[name]
+		if !ok {
+			idx = &IndexInfo{Name: name, Type: typ, Unique: nonUnique == 0}
+			byName[name] = idx
+			order = append(order, name)
+		}
+		idx.Columns = append(idx.Columns, col)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]IndexInfo, 0, len(order))
+	for _, n := range order {
+		out = append(out, *byName[n])
+	}
+	return out, nil
+}
+
+// ListForeignKeys 列出外键
+func (m *Manager) ListForeignKeys(c store.DBConn, password, database, table string) ([]ForeignKeyInfo, error) {
+	db, err := m.Open(c, password)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	q := `SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME,
+		k.REFERENCED_COLUMN_NAME, IFNULL(r.UPDATE_RULE,''), IFNULL(r.DELETE_RULE,'')
+		FROM information_schema.KEY_COLUMN_USAGE k
+		LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r
+		  ON r.CONSTRAINT_SCHEMA=k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME=k.CONSTRAINT_NAME
+		WHERE k.TABLE_SCHEMA=? AND k.TABLE_NAME=? AND k.REFERENCED_TABLE_NAME IS NOT NULL
+		ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION`
+	rows, err := db.QueryContext(ctx, q, database, table)
+	if err != nil {
+		return nil, fmt.Errorf("list fks: %w", err)
+	}
+	defer rows.Close()
+	var out []ForeignKeyInfo
+	for rows.Next() {
+		var fk ForeignKeyInfo
+		if err := rows.Scan(&fk.Name, &fk.Column, &fk.RefTable, &fk.RefColumn, &fk.OnUpdate, &fk.OnDelete); err != nil {
+			return nil, err
+		}
+		out = append(out, fk)
+	}
+	return out, rows.Err()
+}
+
 // ShowCreateTable 返回建表语句（表结构详情）
 func (m *Manager) ShowCreateTable(c store.DBConn, password, database, table string) (string, error) {
 	db, err := m.Open(c, password)
