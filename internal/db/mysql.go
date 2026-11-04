@@ -126,36 +126,138 @@ func Test(c store.DBConn, password string) error {
 	return db.PingContext(ctx)
 }
 
-// isQuery 判断语句是否返回结果集（按首个关键字粗判，够用且简单）
+// isQuery 判断语句是否返回结果集。
+// 仅按首关键字判断不够：WITH ... UPDATE 会被当成查询，
+// SELECT ... INTO OUTFILE 会把文件写入当成结果集（总监评审要求收紧）。
+// 这里做一个轻量的顶层关键字扫描（跳过引号、反引号、注释与括号内内容）。
 func isQuery(sqlText string) bool {
-	s := strings.TrimSpace(sqlText)
-	// 去掉前导注释
-	for strings.HasPrefix(s, "--") || strings.HasPrefix(s, "/*") {
-		if strings.HasPrefix(s, "--") {
-			if idx := strings.IndexByte(s, '\n'); idx >= 0 {
-				s = strings.TrimSpace(s[idx+1:])
-				continue
-			}
-			return false
-		}
-		if idx := strings.Index(s, "*/"); idx >= 0 {
-			s = strings.TrimSpace(s[idx+2:])
-			continue
-		}
+	words := scanTopKeywords(sqlText)
+	if len(words) == 0 {
 		return false
 	}
-	switch strings.ToUpper(firstWord(s)) {
-	case "SELECT", "SHOW", "DESC", "DESCRIBE", "EXPLAIN", "WITH":
+	switch words[0] {
+	case "SELECT", "SHOW", "DESC", "DESCRIBE", "EXPLAIN":
+		// SELECT ... INTO OUTFILE/DUMPFILE 属于写文件，必须走 Exec
+		if hasPhrase(words, "INTO", "OUTFILE") || hasPhrase(words, "INTO", "DUMPFILE") {
+			return false
+		}
+		return true
+	case "WITH":
+		// WITH ... UPDATE/INSERT/DELETE/REPLACE 是写操作
+		for _, w := range words[1:] {
+			switch w {
+			case "UPDATE", "INSERT", "DELETE", "REPLACE":
+				return false
+			}
+		}
 		return true
 	}
 	return false
 }
 
-func firstWord(s string) string {
-	if idx := strings.IndexAny(s, " \t\r\n("); idx > 0 {
-		return s[:idx]
+// scanTopKeywords 返回括号深度为 0、且不在字符串/注释中的大写关键字。
+func scanTopKeywords(sqlText string) []string {
+	var words []string
+	var word strings.Builder
+	depth := 0
+	flush := func() {
+		if word.Len() > 0 {
+			if depth == 0 {
+				words = append(words, strings.ToUpper(word.String()))
+			}
+			word.Reset()
+		}
 	}
-	return s
+	i, n := 0, len(sqlText)
+	for i < n {
+		c := sqlText[i]
+		switch {
+		case c == '\'' || c == '"':
+			flush()
+			quote := c
+			i++
+			for i < n {
+				if sqlText[i] == '\\' && i+1 < n {
+					i += 2
+					continue
+				}
+				if sqlText[i] == quote {
+					if i+1 < n && sqlText[i+1] == quote {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+		case c == '`':
+			flush()
+			i++
+			for i < n && sqlText[i] != '`' {
+				i++
+			}
+			if i < n {
+				i++
+			}
+		case c == '-' && i+1 < n && sqlText[i+1] == '-':
+			flush()
+			for i < n && sqlText[i] != '\n' {
+				i++
+			}
+		case c == '#':
+			flush()
+			for i < n && sqlText[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < n && sqlText[i+1] == '*':
+			flush()
+			i += 2
+			for i+1 < n && !(sqlText[i] == '*' && sqlText[i+1] == '/') {
+				i++
+			}
+			if i+1 < n {
+				i += 2
+			}
+		case c == '(':
+			flush()
+			depth++
+			i++
+		case c == ')':
+			flush()
+			if depth > 0 {
+				depth--
+			}
+			i++
+		case c == '_' || c == '$' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c >= 0x80:
+			word.WriteByte(c)
+			i++
+		default:
+			flush()
+			i++
+		}
+	}
+	flush()
+	return words
+}
+
+func hasPhrase(words []string, phrase ...string) bool {
+	if len(phrase) == 0 || len(words) < len(phrase) {
+		return false
+	}
+	for i := 0; i+len(phrase) <= len(words); i++ {
+		ok := true
+		for j, p := range phrase {
+			if words[i+j] != p {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Query 执行 SQL。查询类返回结果集（最多 limit 行，超出标记 Truncated）；
@@ -478,20 +580,92 @@ func (m *Manager) ListForeignKeys(c store.DBConn, password, database, table stri
 	return out, rows.Err()
 }
 
-// ShowCreateTable 返回建表语句（表结构详情）
+// ShowCreateObject 返回表或视图的建表/建视图语句。
+//
+// 注意：MySQL 的 SHOW CREATE VIEW 返回 4 列（View / Create View /
+// character_set_client / collation_connection），与 SHOW CREATE TABLE 的 2 列不同；
+// 旧实现固定 Scan 2 列，遇到视图必然失败（总监评审必须修改项 5）。
+func (m *Manager) ShowCreateObject(c store.DBConn, password, database, table string) (string, bool, error) {
+	db, err := m.Open(c, password)
+	if err != nil {
+		return "", false, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var typ string
+	err = db.QueryRowContext(ctx,
+		`SELECT TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?`,
+		database, table).Scan(&typ)
+	if err != nil {
+		return "", false, fmt.Errorf("show create object: %w", err)
+	}
+	if strings.EqualFold(typ, "VIEW") {
+		rows, err := db.QueryContext(ctx, "SHOW CREATE VIEW "+quoteIdent(database)+"."+quoteIdent(table))
+		if err != nil {
+			return "", true, fmt.Errorf("show create view: %w", err)
+		}
+		defer rows.Close()
+		cols, err := rows.Columns()
+		if err != nil {
+			return "", true, fmt.Errorf("show create view columns: %w", err)
+		}
+		if !rows.Next() {
+			return "", true, fmt.Errorf("show create view: no row")
+		}
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return "", true, fmt.Errorf("show create view scan: %w", err)
+		}
+		ddl := pickCreateViewDDL(cols, vals)
+		if ddl == "" {
+			return "", true, fmt.Errorf("show create view: empty DDL")
+		}
+		return ddl, true, nil
+	}
+
+	var name, ddl string
+	q := "SHOW CREATE TABLE " + quoteIdent(database) + "." + quoteIdent(table)
+	if err := db.QueryRowContext(ctx, q).Scan(&name, &ddl); err != nil {
+		return "", false, fmt.Errorf("show create table: %w", err)
+	}
+	return ddl, false, nil
+}
+
+// pickCreateViewDDL 从 SHOW CREATE VIEW 的 4 列结果中取出 Create View 列。
+// 单独抽出来便于单元测试（视图返回列与表不同，是总监评审点名的历史缺陷）。
+func pickCreateViewDDL(cols []string, vals []any) string {
+	for i, col := range cols {
+		if strings.EqualFold(col, "Create View") && i < len(vals) && vals[i] != nil {
+			return formatValue(vals[i])
+		}
+	}
+	return ""
+}
+
+// ShowCreateTable 返回建表语句（表结构详情；视图也能正确解析）
 func (m *Manager) ShowCreateTable(c store.DBConn, password, database, table string) (string, error) {
+	ddl, _, err := m.ShowCreateObject(c, password, database, table)
+	return ddl, err
+}
+
+// ServerVersion 返回 MySQL 服务端版本（AI 上下文用；不包含任何连接凭据）
+func (m *Manager) ServerVersion(c store.DBConn, password string) (string, error) {
 	db, err := m.Open(c, password)
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	q := "SHOW CREATE TABLE " + quoteIdent(database) + "." + quoteIdent(table)
-	var name, ddl string
-	if err := db.QueryRowContext(ctx, q).Scan(&name, &ddl); err != nil {
-		return "", fmt.Errorf("show create table: %w", err)
+	var v string
+	if err := db.QueryRowContext(ctx, "SELECT VERSION()").Scan(&v); err != nil {
+		return "", fmt.Errorf("server version: %w", err)
 	}
-	return ddl, nil
+	return v, nil
 }
 
 // formatValue 把驱动返回的值转成展示字符串（时间/数字/二进制统一处理）

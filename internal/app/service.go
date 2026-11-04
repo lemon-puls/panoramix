@@ -48,6 +48,9 @@ type Service struct {
 	dialog    Dialoger
 	dbmgr     *db.Manager
 
+	// AI 助手运行时（配置缓存、两阶段预览、并发闸门）；保持 app → ai 单向依赖
+	ai *aiRuntime
+
 	samplersMu sync.Mutex
 	samplers   map[string]*monitor.Sampler // sessionId → 监控采样器
 }
@@ -55,6 +58,11 @@ type Service struct {
 // NewService 组装服务层
 func NewService(st store.Store, sec store.SecretStore, em Emitter, mgr *ssh.Manager,
 	transfers *sftp.Queue, editor *sftp.Editor, dlg Dialoger, dbmgr *db.Manager) *Service {
+	// 避免 typed-nil 接口：dbmgr 为 nil 时 schema 必须是真正的 nil
+	var schema dbSchema
+	if dbmgr != nil {
+		schema = dbmgr
+	}
 	return &Service{
 		store:     st,
 		secrets:   sec,
@@ -64,6 +72,7 @@ func NewService(st store.Store, sec store.SecretStore, em Emitter, mgr *ssh.Mana
 		editor:    editor,
 		dialog:    dlg,
 		dbmgr:     dbmgr,
+		ai:        newAIRuntime(schema),
 		samplers:  map[string]*monitor.Sampler{},
 	}
 }
@@ -898,7 +907,8 @@ func (s *Service) DBQuery(id, sqlText string, limit int) (*db.Result, error) {
 	}
 	res, qerr := s.dbmgr.Query(c, pw, sqlText, limit)
 	if qerr != nil {
-		log.Printf("[app] db query failed: %v", qerr)
+		// 错误里可能包含重复键值等行数据，先脱敏再写日志（AGENTS.md 硬性要求）
+		log.Printf("[app] db query failed: %s", redactSQLError(qerr))
 		return nil, qerr
 	}
 	return res, nil
