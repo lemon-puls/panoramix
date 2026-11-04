@@ -24,6 +24,7 @@ const props = defineProps<{
   connId: string
   defaultDatabase: string
   sql: string
+  lastRunSql: string
   lastError: string
   locale: string
 }>()
@@ -205,7 +206,10 @@ watch(database, () => {
 
 watch(mode, (m) => {
   if (m === 'explain' || m === 'fix') {
-    if (!sqlInput.value.trim()) sqlInput.value = props.sql
+    // 修复模式优先使用“上次实际执行”的 SQL：用户报错后可能已改过编辑器内容
+    if (!sqlInput.value.trim()) {
+      sqlInput.value = m === 'fix' ? props.lastRunSql || props.sql : props.sql
+    }
     if (m === 'fix' && !errorInput.value.trim()) errorInput.value = props.lastError
   }
 })

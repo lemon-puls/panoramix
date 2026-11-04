@@ -279,6 +279,8 @@ interface WorkTab {
   gridSortDir: 1 | -1
   selectedRow: number
   selectedCol: number
+  // 最近一次实际执行的 SQL（修复模式用它，避免用户报错后改了编辑器导致对象错位）
+  lastRunSql: string
   // AI 助手侧栏是否展开（按查询标签保存，仅前端状态）
   aiOpen: boolean
 }
@@ -322,6 +324,7 @@ function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
     gridSortDir: 1,
     selectedRow: -1,
     selectedCol: -1,
+    lastRunSql: '',
     aiOpen: false,
     ...init,
   })
@@ -535,6 +538,7 @@ async function runQueryTab(tab: WorkTab) {
   if (!text) return
   tab.loading = true
   tab.error = ''
+  tab.lastRunSql = text
   try {
     tab.result = await DBQuery(tab.connId, text, 1000)
     tab.gridSortCol = -1
@@ -1431,6 +1435,7 @@ void load()
               :conn-id="activeTab.connId"
               :default-database="activeTab.database || (active?.dbName ?? '')"
               :sql="activeTab.sql"
+              :last-run-sql="activeTab.lastRunSql"
               :last-error="activeTab.error"
               :locale="uiLocale"
               @close="activeTab.aiOpen = false"
