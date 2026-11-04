@@ -148,6 +148,8 @@ description: Panoramix 工程实现技能包。包含技术栈、架构约束与
 - 根因：channel 被替换，但在途 token 还留在旧 channel；仅判断 `len==0` 仍有竞态
 - 解法：用带等待队列的信号量（`active/limit/waiters` + wake channel）。
   resize 只改 limit：缩容不影响在途请求，扩容立即唤醒 waiter；被唤醒者重新竞争。
+- 取消路径尤其小心：waiter 可能已被 release 唤醒（槽位已转交），随后 ctx 同时取消；
+  取消时必须 `wakeLocked()` 把槽位继续交给下一个 waiter，否则后续请求永久 queued。
   不要用“替换 buffered channel”的方案
 
 ### MySQL 版本注释是可执行 SQL
