@@ -660,6 +660,112 @@ func TestAIGateAcquireCanceledLeavesNoWaiter(t *testing.T) {
 	g.release()
 }
 
+// 回归：被 release 唤醒的等待者若同时被取消，必须把空出的槽位继续交给下一个 waiter。
+func TestAIGateCancelAfterWakeHandsOffSlot(t *testing.T) {
+	g := newAIGate(1)
+	// 模拟 release 之后的状态：active=0，C 仍在队列中；B 已拿到唤醒信号但被取消。
+	g.active = 0
+	chC := make(chan struct{})
+	g.mu.Lock()
+	g.waiters = append(g.waiters, chC)
+	g.mu.Unlock()
+
+	chB := make(chan struct{})
+	g.abandon(chB) // B 已被移出队列（wakeLocked 时已删），此处只是失去槽位
+
+	select {
+	case <-chC:
+		// C 被唤醒，槽位成功转交
+	default:
+		t.Fatal("canceled waiter must hand off the freed slot to the next waiter")
+	}
+}
+
+func TestAIGateQueuedCancelDoesNotStarveNext(t *testing.T) {
+	g := newAIGate(1)
+	if !g.tryAcquire() { // A 持有槽位
+		t.Fatal("A acquire failed")
+	}
+
+	ctxB, cancelB := context.WithCancel(context.Background())
+	errB := make(chan error, 1)
+	go func() { errB <- g.acquire(ctxB) }()
+	waitGateWaiters(t, g, 1)
+
+	gotC := make(chan error, 1)
+	go func() { gotC <- g.acquire(context.Background()) }()
+	waitGateWaiters(t, g, 2)
+
+	cancelB() // B 在入队阶段取消
+	select {
+	case err := <-errB:
+		if err == nil {
+			t.Fatal("B should be canceled")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("B did not return after cancel")
+	}
+	g.release() // A 释放，C 必须被唤醒
+	select {
+	case err := <-gotC:
+		if err != nil {
+			t.Fatalf("C acquire: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("C starved after B was canceled")
+	}
+	g.release()
+}
+
+func waitGateWaiters(t *testing.T, g *aiGate, n int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		g.mu.Lock()
+		got := len(g.waiters)
+		g.mu.Unlock()
+		if got >= n {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d gate waiters", n)
+}
+
+func TestAIWritePermissionRecheckedAtSend(t *testing.T) {
+	svc, _, _, _ := newAITestService(t)
+	conn := createMySQLConn(t, svc, "demo")
+	fake := &fakeClient{resp: "```sql\nUPDATE users SET email = 'x';\n```"}
+	useFakeClient(svc, fake)
+	saveAIConfig(t, svc, "http://127.0.0.1:11434/v1", "m", true, "")
+
+	p1, err := svc.AIPrepare(aiReq(conn.ID))
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	// 预览后关闭“允许写操作”：旧预览不得再返回可插入
+	saveAIConfig(t, svc, "http://127.0.0.1:11434/v1", "m", false, "")
+	res, err := svc.AIGenerate(p1.PrepareID, false)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if res.InsertAllowed || res.InsertBlockReason != ai.WarnWriteOperation {
+		t.Fatalf("allow_write must be rechecked at send time: %+v", res)
+	}
+
+	// 反向：预览时未开启、发送时开启，也不应扩大旧预览权限
+	saveAIConfig(t, svc, "http://127.0.0.1:11434/v1", "m", false, "")
+	p2, _ := svc.AIPrepare(aiReq(conn.ID))
+	saveAIConfig(t, svc, "http://127.0.0.1:11434/v1", "m", true, "")
+	res2, err := svc.AIGenerate(p2.PrepareID, false)
+	if err != nil {
+		t.Fatalf("generate 2: %v", err)
+	}
+	if res2.InsertAllowed {
+		t.Fatal("enabling allow_write after preview must not expand the preview's permission")
+	}
+}
+
 func TestAIWriteAndMultiStatementBlocked(t *testing.T) {
 	svc, _, _, _ := newAITestService(t)
 	conn := createMySQLConn(t, svc, "demo")

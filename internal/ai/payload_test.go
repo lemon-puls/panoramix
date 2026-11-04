@@ -182,45 +182,75 @@ func TestPayloadHashStable(t *testing.T) {
 	}
 }
 
+func TestBuildPayloadFiltersIdentifiers(t *testing.T) {
+	built, err := BuildPayload(BuildInput{
+		Mode:         ModeGenerate,
+		Question:     "q",
+		Database:     "demo\x00x",
+		MySQLVersion: "8.0.36\ninjected",
+		Tables: []TableSchema{{
+			Name: "users\x07",
+			DDL:  "CREATE TABLE `users` (`id` bigint)",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	combined := built.SystemPrompt + built.UserPrompt
+	if strings.ContainsAny(combined, "\x00\x07") {
+		t.Fatal("control characters in identifiers/database/version must be stripped")
+	}
+	if !strings.Contains(combined, "### TABLE `users`") {
+		t.Fatalf("sanitized table name missing:\n%s", combined)
+	}
+	if !strings.Contains(combined, "Database: demox") {
+		t.Fatalf("sanitized database missing:\n%s", combined)
+	}
+	if strings.Contains(combined, "\ninjected") {
+		t.Fatal("version newline must not create a new injected prompt line")
+	}
+}
+
 func TestBuildPayloadSensitiveHints(t *testing.T) {
 	built, err := BuildPayload(BuildInput{
 		Mode:     ModeFix,
 		SQL:      "-----BEGIN RSA PRIVATE KEY-----\nabc",
 		Error:    "Authorization: Bearer sk-abc123",
 		Question: "password=hunter2 contact a@b.com key AKIAIOSFODNN7EXAMPLE",
+		Tables: []TableSchema{{
+			Name: "users",
+			DDL:  "CREATE TABLE `users` (`email` varchar(128) COMMENT 'contact ops@example.com')",
+		}},
 	})
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	want := map[string]string{
-		SensitivePasswordAssignment: "question",
-		SensitiveEmail:              "question",
-		SensitiveAWSAccessKey:       "question",
-		SensitivePrivateKey:         "sql",
-		SensitiveBearerToken:        "error",
+	wantPairs := map[string]bool{
+		"question/" + SensitivePasswordAssignment: true,
+		"question/" + SensitiveEmail:              true,
+		"question/" + SensitiveAWSAccessKey:       true,
+		"sql/" + SensitivePrivateKey:              true,
+		"error/" + SensitiveBearerToken:           true,
+		"schema/" + SensitiveEmail:                true,
 	}
-	if len(built.SensitiveHints) < len(want) {
-		t.Fatalf("missing hints: %+v", built.SensitiveHints)
-	}
+	found := map[string]bool{}
 	for _, h := range built.SensitiveHints {
-		if f, ok := want[h.Kind]; ok && f != h.Field {
-			t.Fatalf("hint %s field = %s, want %s", h.Kind, h.Field, f)
+		key := h.Field + "/" + h.Kind
+		if wantPairs[key] {
+			found[key] = true
 		}
 	}
-	for kind := range want {
-		found := false
-		for _, h := range built.SensitiveHints {
-			if h.Kind == kind {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("missing hint kind %s: %+v", kind, built.SensitiveHints)
+	for key := range wantPairs {
+		if !found[key] {
+			t.Fatalf("missing hint %s: %+v", key, built.SensitiveHints)
 		}
 	}
 	// 提示只含字段/类型，绝不回显命中内容
 	dump := fmt.Sprintf("%v", built.SensitiveHints)
-	for _, secret := range []string{"hunter2", "a@b.com", "sk-abc123", "AKIAIOSFODNN7EXAMPLE", "BEGIN RSA"} {
+	for _, secret := range []string{
+		"hunter2", "a@b.com", "ops@example.com", "sk-abc123",
+		"AKIAIOSFODNN7EXAMPLE", "BEGIN RSA",
+	} {
 		if strings.Contains(dump, secret) {
 			t.Fatalf("sensitive hint leaked %q: %s", secret, dump)
 		}

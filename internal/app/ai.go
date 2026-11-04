@@ -495,6 +495,9 @@ func (s *Service) AIGenerate(prepareID string, consent bool) (*ai.Result, error)
 	if curEp.Hash != entry.endpoint.Hash || cur.Model != entry.cfg.Model {
 		return nil, aiError("config_changed", "configuration changed; preview again")
 	}
+	// 写权限在发送时重新确认：预览后关闭“允许写操作”必须立即生效；
+	// 预览后开启也不扩大旧预览的权限（两者都允许才可插入）。
+	allowWriteNow := entry.allowWrite && cur.AllowWrite
 	// 发送前按“当前”授权状态重新判定，而不是信任 Prepare 时的快照：
 	// 用户在预览后执行了「清除云端授权」时，旧预览不得继续发往非本机 endpoint。
 	needsConsentNow := entry.endpoint.Scope != ai.ScopeLocal && !s.hasCloudConsent(entry.endpoint.Hash)
@@ -578,7 +581,7 @@ func (s *Service) AIGenerate(prepareID string, consent bool) (*ai.Result, error)
 	}
 	warnings = dedupeAIWarnings(warnings)
 
-	allowed, blockReason := analysis.InsertPolicy(entry.allowWrite)
+	allowed, blockReason := analysis.InsertPolicy(allowWriteNow)
 	if strings.TrimSpace(sqlText) == "" {
 		allowed = false
 		blockReason = "no_sql"
@@ -676,7 +679,7 @@ func (s *Service) grantCloudConsent(endpointHash, endpoint string) {
 		log.Printf("[ai] save consent failed: %v", err)
 		return
 	}
-	log.Printf("[ai] cloud endpoint consent granted: scope=cloud")
+	log.Printf("[ai] endpoint consent granted: non-local endpoint")
 }
 
 // AIClearConsents 清除全部云端授权（key 不受影响）。
@@ -803,12 +806,17 @@ func (g *aiGate) tryAcquire() bool {
 }
 
 // acquire 在达到并发上限时排队；ctx 取消时从等待队列移除并返回错误。
+// 关键：取消路径必须调用 wakeLocked()——若该 waiter 已被 release 唤醒
+// （槽位已转交给它）但同时又收到取消，必须把槽位继续转交给下一个 waiter，
+// 否则后续请求会永久停在 queued。
 func (g *aiGate) acquire(ctx context.Context) error {
 	for {
+		g.mu.Lock()
 		if err := ctx.Err(); err != nil {
+			g.wakeLocked()
+			g.mu.Unlock()
 			return err
 		}
-		g.mu.Lock()
 		if g.active < g.limit {
 			g.active++
 			g.mu.Unlock()
@@ -822,17 +830,23 @@ func (g *aiGate) acquire(ctx context.Context) error {
 		case <-ch:
 			// 被唤醒后重新竞争（可能被其它 waiter 先拿到）
 		case <-ctx.Done():
-			g.mu.Lock()
-			for i, w := range g.waiters {
-				if w == ch {
-					g.waiters = append(g.waiters[:i], g.waiters[i+1:]...)
-					break
-				}
-			}
-			g.mu.Unlock()
+			g.abandon(ch)
 			return ctx.Err()
 		}
 	}
+}
+
+// abandon 放弃等待：把自己从队列移除，并把可能已经到手的空槽交给下一个 waiter。
+func (g *aiGate) abandon(ch chan struct{}) {
+	g.mu.Lock()
+	for i, w := range g.waiters {
+		if w == ch {
+			g.waiters = append(g.waiters[:i], g.waiters[i+1:]...)
+			break
+		}
+	}
+	g.wakeLocked()
+	g.mu.Unlock()
 }
 
 func (g *aiGate) release() {

@@ -104,10 +104,14 @@ func BuildPayload(in BuildInput) (*Built, error) {
 	if budget <= 0 {
 		budget = MaxSchemaRunes
 	}
+	// 标识符/库名/版本同样过滤控制字符（与 question 同等待遇）
+	database := stripControlChars(strings.TrimSpace(in.Database), false)
+	version := stripControlChars(strings.TrimSpace(in.MySQLVersion), false)
 
 	selected := make(map[string]bool, len(in.Tables))
 	for _, t := range in.Tables {
-		selected[strings.ToLower(t.Name)] = true
+		name := stripControlChars(strings.TrimSpace(t.Name), false)
+		selected[strings.ToLower(name)] = true
 	}
 
 	var sb strings.Builder
@@ -115,13 +119,14 @@ func BuildPayload(in BuildInput) (*Built, error) {
 	previews := make([]TablePreview, 0, len(in.Tables))
 	var warnings []Warning
 	for _, t := range in.Tables {
+		name := stripControlChars(strings.TrimSpace(t.Name), false)
 		ddl := SanitizeDDL(t.DDL)
 		chars := utf8.RuneCountInString(ddl)
 		total += chars
-		previews = append(previews, TablePreview{Name: t.Name, Chars: chars})
+		previews = append(previews, TablePreview{Name: name, Chars: chars})
 		if ddl != "" {
 			sb.WriteString("### TABLE `")
-			sb.WriteString(t.Name)
+			sb.WriteString(name)
 			sb.WriteString("`\n")
 			sb.WriteString(ddl)
 			sb.WriteString("\n\n")
@@ -140,7 +145,7 @@ func BuildPayload(in BuildInput) (*Built, error) {
 	schema := strings.TrimSpace(sb.String())
 	locale := normalizeLocale(in.Locale)
 	system := systemPrompt(mode, locale)
-	user := userPrompt(mode, locale, in.Database, in.MySQLVersion, question, sqlText, errText, schema, previews)
+	user := userPrompt(mode, locale, database, version, question, sqlText, errText, schema, previews)
 
 	payload := "[system]\n" + system + "\n\n[user]\n" + user
 	return &Built{
@@ -150,7 +155,7 @@ func BuildPayload(in BuildInput) (*Built, error) {
 		PromptChars:    utf8.RuneCountInString(payload),
 		Tables:         previews,
 		Warnings:       dedupeWarnings(warnings),
-		SensitiveHints: detectSensitiveHints(question, sqlText, errText),
+		SensitiveHints: detectSensitiveHints(question, sqlText, errText, schema),
 	}, nil
 }
 
@@ -273,9 +278,9 @@ var (
 	reEmailAddress   = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
 )
 
-// detectSensitiveHints 检测用户输入中的疑似敏感内容。
+// detectSensitiveHints 检测用户输入与 schema 注释中的疑似敏感内容。
 // 只返回字段与类型，不返回命中值；不自动删改用户输入（设计已接受该残余风险）。
-func detectSensitiveHints(question, sqlText, errorText string) []SensitiveHint {
+func detectSensitiveHints(question, sqlText, errorText, schemaText string) []SensitiveHint {
 	type check struct {
 		kind string
 		re   *regexp.Regexp
@@ -295,6 +300,7 @@ func detectSensitiveHints(question, sqlText, errorText string) []SensitiveHint {
 		{"question", question},
 		{"sql", sqlText},
 		{"error", errorText},
+		{"schema", schemaText},
 	}
 	var out []SensitiveHint
 	for _, f := range fields {
