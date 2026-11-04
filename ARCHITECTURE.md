@@ -78,7 +78,7 @@ v0.3.1 追加（AI SQL 助手，两阶段协议）：
 返回 `{prepareId, payload, payloadHash, chars, warnings, needsConsent}`；
 `AIGenerate(prepareId, consent)` 只发送缓存原文（单次使用、5 分钟过期），
 因此“预览 = 实发”；`AICancel(requestId)` 取消进行中的请求；`AIClearConsents` 清除
-按 endpoint 记录的云端授权。
+按 endpoint 记录的非本机（LAN/云端）授权。
 
 ### 事件（后端 → 前端，Wails Events）
 
@@ -110,7 +110,7 @@ camelCase 以与现有代码一致；全量统一命名另开任务，不在本�
 - **AI 配置（v0.3.1）**：`ai.enabled / ai.provider / ai.base_url / ai.model /
   ai.temperature / ai.timeout_sec / ai.allow_write / ai.allow_insecure_tls /
   ai.concurrency / ai.cloud_consent`。`ai.cloud_consent` 是
-  `{endpointHash: {endpoint, grantedAt}}` JSON，授权按规范化 endpoint 记录。
+  `{endpointHash: {endpoint, grantedAt}}` JSON，非本机（LAN/云端）授权按规范化 endpoint 记录。
   不新增表；prompt / response / 行数据不落库。
 - **API key**：OS keychain，account=`ai:{provider}:{endpointHash}:api_key`。
   endpointHash = sha256(协议+主机+端口+路径) 前 16 位；换 endpoint 不复用旧 key，

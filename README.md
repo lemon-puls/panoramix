@@ -78,18 +78,19 @@ v0.1 尚未发布。发布后提供 Windows 便携版（单 exe + zip）。
 - 主机指纹采用 TOFU（首次信任）策略，兼容 OpenSSH known_hosts 格式
 - 断点续传按文件大小判断断点（与 WinSCP 一致）；覆盖已有文件时强制整文件重传
 - **AI 助手默认关闭**。启用后默认只允许本机模型（Ollama / LM Studio，loopback）；
-  只有用户显式配置云端 provider 并**按 endpoint 确认**后，才会向该 endpoint 发送
+  只有用户显式配置**非本机** provider（局域网或云端）并**按 endpoint 确认**后，才会向该 endpoint 发送
   **所选表的 schema 元数据**（表/列名、类型、索引、外键、注释）、数据库名、MySQL 版本
   与用户问题。
 - **AI 永不发送**：行数据、结果集、样例值、查询历史、连接主机/端口/用户名、密码、
   API key 与会话日志。无自动上报、无遥测。
-- 每次发送前都可查看**完整 payload 预览**；后端只发送预览时缓存的原文
-  （两阶段协议，预览 = 实发）。HTTP 客户端禁止跟随重定向，API key 只放
-  `Authorization` header 并存入系统凭据库（按规范化 endpoint 绑定）。
+- 每次发送前都可查看**完整 payload 预览**；预览会对 `password=`、Bearer token、私钥块、
+  AWS Access Key、邮箱等疑似敏感内容给出黄色提示（只提示，不自动删改用户输入）；
+  后端只发送预览时缓存的原文（两阶段协议，预览 = 实发）。HTTP 客户端禁止跟随重定向，
+  API key 只放 `Authorization` header 并存入系统凭据库（按规范化 endpoint 绑定）。
 - AI 生成的 SQL **只会插入编辑器**，包括 DML/DDL；**永不自动执行**，必须由用户
   人工确认后按 `Ctrl+Enter` 运行。表/列注释在提示词中按不可信数据处理。
-- 残余风险：schema 本身可能包含商业信息；云端 provider 的日志/留存策略由对方控制。
-  默认本地模型 + 发送预览是当前的隐私边界。
+- 残余风险：schema 本身可能包含商业信息；非本机 provider（尤其是云端）的日志/留存策略
+  由对方控制。默认本地模型 + 发送预览是当前的隐私边界。
 
 ## 镜像与许可
 

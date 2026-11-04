@@ -135,3 +135,26 @@ description: Panoramix 工程实现技能包。包含技术栈、架构约束与
 - `preview.html?app=1&view=db&ai=1` 会自动展开 AI 侧栏（mock provider，不联网）
 - 用 Chrome `--remote-debugging-port=9222` + Node 全局 WebSocket 可跑完整交互：
   填问题 → 生成 → 首次发送确认 → 插入编辑器；同时用 `clientWidth/scrollWidth` 查溢出
+- 额外场景参数：`&ai_cloud=1` / `&ai_lan=1` / `&ai_setup=1` / `&ai_consent=1` / `&ai_sensitive=1`
+
+### Prepare 快照不能替代发送时的授权检查
+- 现象：预览后清除云端授权，旧 prepareId 仍能发送
+- 根因：AIGenerate 只信 Prepare 时的 NeedsConsent 快照
+- 解法：发送前按当前 `hasCloudConsent(endpointHash)` 重判；无授权返回 `consent_required`，
+  用户确认（consent=true）时才重新记录
+
+### 信号量缩容不能替换 channel
+- 现象：并发 2→1 后短暂出现 2 个请求同时打到 provider；或旧 token 释放后计数错乱
+- 根因：channel 被替换，但在途 token 还留在旧 channel
+- 解法：仅当 `len(ch)==0` 时才替换 channel；忙碌时保留旧容量，等空闲再调整
+
+### MySQL 版本注释是可执行 SQL
+- 现象：`/*!50000 UPDATE ... */` 被当成普通注释，判定为只读
+- 根因：词法扫描把所有 `/* ... */` 都跳过
+- 解法：扫描前展开 `/*!NNNNN ... */`（去掉标记与版本号，保留内容）；
+  普通 `/* ... */` 仍然跳过。`SELECT 1 /*!50000 INTO OUTFILE ...*/` 必须判危险
+
+### 输入框宽度溢出
+- 现象：textarea `width:100%` + 左右 padding 后比容器宽 20px
+- 解法：`box-sizing: border-box`；用 CDP 在 1600/960 视口断言
+  `clientWidth === scrollWidth` 且 `documentElement` 无横向溢出

@@ -95,12 +95,12 @@
 > 在 v0.3 与 v0.4 之间插入；K3s 时间点顺延约 3–4 周。
 
 - ✅ 三种模式共用一套 provider / 流式输出 / 插入逻辑：**生成、解释、修复**
-- ✅ Provider：本地 Ollama / LM Studio（默认）与 OpenAI-compatible（云端需显式授权）
+- ✅ Provider：本地 Ollama / LM Studio（默认）与 OpenAI-compatible（非本机 endpoint 需显式授权）
 - ✅ 两阶段协议：`AIPrepare` 构建并缓存 payload 返回预览；`AIGenerate` 只发送缓存原文
   （单次使用、5 分钟过期），保证“预览 = 实发”
 - ✅ 隐私：只发 schema 元数据（SHOW CREATE TABLE 脱敏）、库名、MySQL 版本、问题；
   不发任何行数据/结果集/查询历史/连接主机/用户名/密码；视图排除在上下文外
-- ✅ API key 存 keychain，按规范化 endpoint 绑定；云端授权按 endpoint 记录；
+- ✅ API key 存 keychain，按规范化 endpoint 绑定；非本机（LAN/云端）授权按 endpoint 记录；
   切换 endpoint 删除旧 key、要求重新授权
 - ✅ HTTP 客户端收紧：禁止重定向、禁止 URL userinfo、响应体 2MB 上限、
   连接/首包/总超时分离、禁用环境代理
@@ -109,7 +109,7 @@
 - ✅ SQL 静态判定：多语句、写操作、危险结构、未知表；写操作仅允许人工确认后插入
 - ✅ 全局并发 1（可配 1–2）、取消、超时、错误映射、流式 `ai:delta` / `ai:status` 事件
 - ✅ 确定性测试：httptest 假 provider、payload 快照、重定向/超时/取消/并发/授权绑定
-- ✅ 前端：查询标签 AI 侧栏（320px）、配置弹窗、首次发送预览、云端授权弹窗、
+- ✅ 前端：查询标签 AI 侧栏（320px）、配置弹窗、首次发送预览、非本机授权弹窗、
   插入编辑器（保留 undo）、zh-CN / en-US
 
 ## v0.3.2 —— 数据标签增强（计划）
