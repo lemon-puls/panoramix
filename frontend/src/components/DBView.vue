@@ -2075,16 +2075,19 @@ void load()
   color: var(--text-primary);
 }
 .cell-input {
-  width: 100%;
-  min-width: 80px;
+  position: absolute;
+  inset: 1px;
+  width: auto;
+  box-sizing: border-box;
   background: var(--bg-app);
   border: 1px solid var(--accent);
   border-radius: 3px;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 12px;
-  padding: 1px 4px;
+  padding: 0 4px;
   outline: none;
+  z-index: 2;
 }
 .pill-accent {
   background: var(--accent-soft);
@@ -2142,7 +2145,7 @@ void load()
 }
 .grid th,
 .grid td {
-  padding: 6px 12px;
+  padding: 4px 10px;
   border-bottom: 1px solid var(--border-subtle);
   text-align: left;
   white-space: nowrap;
@@ -2182,6 +2185,7 @@ void load()
 }
 .grid td {
   cursor: pointer;
+  position: relative;
 }
 .grid td.selected {
   background: rgba(94, 234, 212, 0.22);
