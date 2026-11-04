@@ -93,3 +93,45 @@ description: Panoramix 工程实现技能包。包含技术栈、架构约束与
 
 ### 外部命令与 PTY
 - 构造测试服务端时要**忠实应用客户端声明的尺寸**，否则会掩盖客户端 bug
+
+## 六、AI / 流式 / 预览（v0.3.1）
+
+### Go raw string 不能包含反引号
+- 现象：`go build` 报 `missing ',' in argument list`，行号指向 prompt 字符串
+- 根因：用反引号原始字符串写 `` ```sql `` 代码块，反引号提前终止字面量
+- 解法：prompt 里的 ``` 用双引号字符串 + `\n` 拼接，或拼接 `"```"`
+
+### 手写绑定 + Wails 自动生成会重复
+- 现象：Rollup `Identifier AICancel has already been declared`
+- 根因：`wails dev` 重新生成 `frontend/wailsjs/go/app/*`，与手写声明叠加
+- 解法：改完绑定立即跑 `python3 scripts/dedupe_bindings.py`（本次去重 8 个）
+
+### 预览 = 实发必须靠缓存，不能靠“再构建一次”
+- 现象：预览后改问题/表结构，实际发送与预览不一致
+- 根因：preview 与 generate 各自构建 payload
+- 解法：`AIPrepare` 生成 `prepareId` 并缓存 system/user 原文；`AIGenerate` 只取缓存
+  发送（单次使用 + 5 分钟过期）；测试用 httptest 捕获消息体断言逐字相等
+
+### 取消 map 以 requestId 为键：不同请求必须用不同 ID
+- 现象：两个标签并发生成，其中一个莫名 `canceled`
+- 根因：同一 requestId 的“新请求取消旧请求”逻辑被不同标签复用
+- 解法：前端每个请求生成独立 ID（`crypto.randomUUID` 不存在时用时间戳 fallback）
+
+### NInput 上的 keydown 监听可能到不了内部 textarea
+- 现象：AI 输入框 Ctrl+Enter 不触发生成
+- 解法：需要键盘交互的输入用原生 `<textarea v-model>`，事件监听可靠
+- 插入编辑器用 `setRangeText` + `input` 事件（保留 undo），不要在前后无空白时直接拼接
+
+### 禁止环境代理 / 禁止重定向
+- 现象：本机 endpoint 的 schema 被 307 转发到公网
+- 解法：`http.Transport{Proxy: nil}` + `CheckRedirect` 返回 `http.ErrUseLastResponse`；
+  3xx 一律判错。`httptest` 起第二个 server 断言命中数为 0
+
+### 本地 7B 冷启动超时
+- 60s 不够（首次加载模型可能 90s+）；总超时默认 120s，`ResponseHeaderTimeout` 60s，
+  错误码区分 `timeout` / `connection` / `model_not_found`
+
+### 预览页验证 AI 侧栏
+- `preview.html?app=1&view=db&ai=1` 会自动展开 AI 侧栏（mock provider，不联网）
+- 用 Chrome `--remote-debugging-port=9222` + Node 全局 WebSocket 可跑完整交互：
+  填问题 → 生成 → 首次发送确认 → 插入编辑器；同时用 `clientWidth/scrollWidth` 查溢出

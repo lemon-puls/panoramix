@@ -89,6 +89,34 @@
   node_modules 阻塞）、结果分页与数据编辑（v0.4）、二进制/JSON 格式化视图、
   Redis stream 类型、监控历史落盘（YAGNI，按需）
 
+## v0.3.1 —— AI SQL 助手（2026-11-04 插入）
+
+> 设计见 `docs/design/001-next-iteration.md`，评审见 `docs/design/001-review.md`。
+> 在 v0.3 与 v0.4 之间插入；K3s 时间点顺延约 3–4 周。
+
+- ✅ 三种模式共用一套 provider / 流式输出 / 插入逻辑：**生成、解释、修复**
+- ✅ Provider：本地 Ollama / LM Studio（默认）与 OpenAI-compatible（云端需显式授权）
+- ✅ 两阶段协议：`AIPrepare` 构建并缓存 payload 返回预览；`AIGenerate` 只发送缓存原文
+  （单次使用、5 分钟过期），保证“预览 = 实发”
+- ✅ 隐私：只发 schema 元数据（SHOW CREATE TABLE 脱敏）、库名、MySQL 版本、问题；
+  不发任何行数据/结果集/查询历史/连接主机/用户名/密码；视图排除在上下文外
+- ✅ API key 存 keychain，按规范化 endpoint 绑定；云端授权按 endpoint 记录；
+  切换 endpoint 删除旧 key、要求重新授权
+- ✅ HTTP 客户端收紧：禁止重定向、禁止 URL userinfo、响应体 2MB 上限、
+  连接/首包/总超时分离、禁用环境代理
+- ✅ DDL 脱敏（DEFINER/AUTO_INCREMENT/版本注释）；修正视图 SHOW CREATE 解析；
+  收紧 `isQuery`（WITH ... UPDATE、SELECT ... INTO OUTFILE）
+- ✅ SQL 静态判定：多语句、写操作、危险结构、未知表；写操作仅允许人工确认后插入
+- ✅ 全局并发 1（可配 1–2）、取消、超时、错误映射、流式 `ai:delta` / `ai:status` 事件
+- ✅ 确定性测试：httptest 假 provider、payload 快照、重定向/超时/取消/并发/授权绑定
+- ✅ 前端：查询标签 AI 侧栏（320px）、配置弹窗、首次发送预览、云端授权弹窗、
+  插入编辑器（保留 undo）、zh-CN / en-US
+
+## v0.3.2 —— 数据标签增强（计划）
+
+- 列显示/隐藏（按连接+库+表持久化）、多条件筛选、单元格/列右键快捷筛选
+- 服务端过滤/排序/分页；不做 OR/嵌套条件、不做保存筛选方案
+
 ## v0.4 —— K3s/K8s
 
 - 接入：**SSH 自动发现为主**（检测 `/etc/rancher/k3s/k3s.yaml`，经 SSH 隧道转换为可用 kubeconfig），手动导入 kubeconfig 为辅
@@ -98,7 +126,8 @@
 ## v0.5 —— YAML 编辑 + AI 运维（届时另开设计轮）
 
 - YAML 编辑 + apply（diff 预览确认）；可编辑结果网格（DML 生成预览）
-- AI 运维：自然语言查日志/报错、命令生成；数据模型从 v0.1 的 snippets 表演进
+- AI 运维：终端**用户选中文本**的报错解释与命令建议（只插入、不回车）；复用 v0.3.1
+  的 provider / keychain / 预览与脱敏基础设施。SQL 助手已在 v0.3.1 落地
 - 届时重新拷问：模型接入方式、隐私边界、成本
 
 ## Backlog（无排期，按社区反馈）
