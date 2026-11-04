@@ -1,3 +1,273 @@
+export namespace ai {
+	
+	export class Config {
+	    enabled: boolean;
+	    provider: string;
+	    baseUrl: string;
+	    model: string;
+	    temperature: number;
+	    timeoutSec: number;
+	    allowWrite: boolean;
+	    allowInsecureTls: boolean;
+	    concurrency: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Config(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.provider = source["provider"];
+	        this.baseUrl = source["baseUrl"];
+	        this.model = source["model"];
+	        this.temperature = source["temperature"];
+	        this.timeoutSec = source["timeoutSec"];
+	        this.allowWrite = source["allowWrite"];
+	        this.allowInsecureTls = source["allowInsecureTls"];
+	        this.concurrency = source["concurrency"];
+	    }
+	}
+	export class Warning {
+	    code: string;
+	    detail?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Warning(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.code = source["code"];
+	        this.detail = source["detail"];
+	    }
+	}
+	export class ConfigView {
+	    enabled: boolean;
+	    provider: string;
+	    baseUrl: string;
+	    model: string;
+	    temperature: number;
+	    timeoutSec: number;
+	    allowWrite: boolean;
+	    allowInsecureTls: boolean;
+	    concurrency: number;
+	    hasKey: boolean;
+	    endpoint: string;
+	    endpointHash: string;
+	    scope: string;
+	    cloudConsent: boolean;
+	    warnings: Warning[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ConfigView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.provider = source["provider"];
+	        this.baseUrl = source["baseUrl"];
+	        this.model = source["model"];
+	        this.temperature = source["temperature"];
+	        this.timeoutSec = source["timeoutSec"];
+	        this.allowWrite = source["allowWrite"];
+	        this.allowInsecureTls = source["allowInsecureTls"];
+	        this.concurrency = source["concurrency"];
+	        this.hasKey = source["hasKey"];
+	        this.endpoint = source["endpoint"];
+	        this.endpointHash = source["endpointHash"];
+	        this.scope = source["scope"];
+	        this.cloudConsent = source["cloudConsent"];
+	        this.warnings = this.convertValues(source["warnings"], Warning);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TablePreview {
+	    name: string;
+	    chars: number;
+	    excluded: boolean;
+	    reason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TablePreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.chars = source["chars"];
+	        this.excluded = source["excluded"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class Prepared {
+	    prepareId: string;
+	    requestId: string;
+	    payload: string;
+	    payloadHash: string;
+	    promptChars: number;
+	    schemaChars: number;
+	    tables: TablePreview[];
+	    warnings: Warning[];
+	    endpoint: string;
+	    endpointHash: string;
+	    scope: string;
+	    provider: string;
+	    model: string;
+	    needsConsent: boolean;
+	    expiresInSec: number;
+	    allowWrite: boolean;
+	    mode: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Prepared(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.prepareId = source["prepareId"];
+	        this.requestId = source["requestId"];
+	        this.payload = source["payload"];
+	        this.payloadHash = source["payloadHash"];
+	        this.promptChars = source["promptChars"];
+	        this.schemaChars = source["schemaChars"];
+	        this.tables = this.convertValues(source["tables"], TablePreview);
+	        this.warnings = this.convertValues(source["warnings"], Warning);
+	        this.endpoint = source["endpoint"];
+	        this.endpointHash = source["endpointHash"];
+	        this.scope = source["scope"];
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.needsConsent = source["needsConsent"];
+	        this.expiresInSec = source["expiresInSec"];
+	        this.allowWrite = source["allowWrite"];
+	        this.mode = source["mode"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Request {
+	    requestId: string;
+	    connId: string;
+	    database: string;
+	    mode: string;
+	    question: string;
+	    tables: string[];
+	    sql: string;
+	    error: string;
+	    locale: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Request(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.requestId = source["requestId"];
+	        this.connId = source["connId"];
+	        this.database = source["database"];
+	        this.mode = source["mode"];
+	        this.question = source["question"];
+	        this.tables = source["tables"];
+	        this.sql = source["sql"];
+	        this.error = source["error"];
+	        this.locale = source["locale"];
+	    }
+	}
+	export class Result {
+	    sql: string;
+	    explanation: string;
+	    warnings: Warning[];
+	    provider: string;
+	    model: string;
+	    durationMs: number;
+	    promptChars: number;
+	    responseChars: number;
+	    isWrite: boolean;
+	    multiStatement: boolean;
+	    dangerous: boolean;
+	    uncertain: boolean;
+	    insertAllowed: boolean;
+	    insertBlockReason?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Result(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sql = source["sql"];
+	        this.explanation = source["explanation"];
+	        this.warnings = this.convertValues(source["warnings"], Warning);
+	        this.provider = source["provider"];
+	        this.model = source["model"];
+	        this.durationMs = source["durationMs"];
+	        this.promptChars = source["promptChars"];
+	        this.responseChars = source["responseChars"];
+	        this.isWrite = source["isWrite"];
+	        this.multiStatement = source["multiStatement"];
+	        this.dangerous = source["dangerous"];
+	        this.uncertain = source["uncertain"];
+	        this.insertAllowed = source["insertAllowed"];
+	        this.insertBlockReason = source["insertBlockReason"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+
+}
+
 export namespace app {
 	
 	export class ConnectHostResult {

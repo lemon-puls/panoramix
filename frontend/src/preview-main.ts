@@ -7,6 +7,7 @@ import { zhCN, dateZhCN } from 'naive-ui'
 
 type Handler = (...args: any[]) => void
 const handlers = new Map<string, Handler[]>()
+let lastAIRequestId = 'preview-ai-req'
 
 // 必须在任何模块 import monitor.ts 之前挂载 mock
 ;(window as any).runtime = {
@@ -85,6 +86,106 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
     { field: 'created_at', type: 'datetime', null: 'YES', key: '', default: 'CURRENT_TIMESTAMP', extra: '', comment: '' },
   ],
   DBShowCreateTable: async () => 'CREATE TABLE `users` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(64) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;',
+  // AI 预览 mock：不依赖真实模型，用于验证侧栏布局与交互
+  AIGetConfig: async () => {
+    const params = new URLSearchParams(location.search)
+    if (params.get('ai_setup') === '1') {
+      return {
+        enabled: false,
+        provider: 'ollama',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        model: '',
+        temperature: 0.1,
+        timeoutSec: 120,
+        allowWrite: false,
+        allowInsecureTls: false,
+        concurrency: 1,
+        hasKey: false,
+        endpoint: 'http://127.0.0.1:11434/v1',
+        endpointHash: 'ab12cd34ef56ab78',
+        scope: 'local',
+        cloudConsent: false,
+        warnings: [],
+      }
+    }
+    const cloud = params.get('ai_cloud') === '1'
+    return {
+      enabled: true,
+      provider: cloud ? 'openai-compatible' : 'ollama',
+      baseUrl: cloud ? 'https://api.example.com/v1' : 'http://127.0.0.1:11434/v1',
+      model: 'qwen2.5-coder:7b',
+      temperature: 0.1,
+      timeoutSec: 120,
+      allowWrite: false,
+      allowInsecureTls: false,
+      concurrency: 1,
+      hasKey: cloud,
+      endpoint: cloud ? 'https://api.example.com/v1' : 'http://127.0.0.1:11434/v1',
+      endpointHash: cloud ? 'ff00ff00ff00ff00' : 'ab12cd34ef56ab78',
+      scope: cloud ? 'cloud' : 'local',
+      cloudConsent: false,
+      warnings: [],
+    }
+  },
+  AIPrepare: async (req: any) => {
+    const cloud = new URLSearchParams(location.search).get('ai_cloud') === '1'
+    lastAIRequestId = req?.requestId ?? 'preview-ai-req'
+    return {
+      prepareId: 'prep-preview',
+      requestId: lastAIRequestId,
+      payload:
+        '[system]\nYou are a MySQL 8.0 SQL assistant embedded in a database client.\n\n[user]\nMode: ' +
+        (req?.mode ?? 'generate') +
+        '\nDatabase: demo\nMySQL version: 8.0.36\nSelected tables: users, orders\nQuestion:\n' +
+        (req?.question ?? '') +
+        '\n\n<schema>\n### TABLE `users`\nCREATE TABLE `users` (\n  `id` bigint unsigned NOT NULL,\n  `email` varchar(128) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB\n\n### TABLE `orders`\nCREATE TABLE `orders` (\n  `id` bigint unsigned NOT NULL,\n  `user_id` bigint unsigned NOT NULL,\n  KEY `idx_user` (`user_id`)\n) ENGINE=InnoDB\n</schema>\n',
+      payloadHash: 'ab12cd34ef56ab78',
+      promptChars: 1860,
+      schemaChars: 612,
+      tables: [
+        { name: 'orders', chars: 302, excluded: false },
+        { name: 'users', chars: 310, excluded: false },
+        { name: 'v_user_summary', chars: 0, excluded: true, reason: 'view' },
+      ],
+      warnings: [{ code: 'foreign_key_unselected', detail: 'payments' }],
+      endpoint: cloud ? 'https://api.example.com/v1' : 'http://127.0.0.1:11434/v1',
+      endpointHash: cloud ? 'ff00ff00ff00ff00' : 'ab12cd34ef56ab78',
+      scope: cloud ? 'cloud' : 'local',
+      provider: cloud ? 'openai-compatible' : 'ollama',
+      model: 'qwen2.5-coder:7b',
+      needsConsent: cloud,
+      expiresInSec: 300,
+      allowWrite: false,
+      mode: req?.mode ?? 'generate',
+    }
+  },
+  AIGenerate: async () => {
+    emit('ai:status', { requestId: lastAIRequestId, phase: 'request' })
+    emit('ai:delta', { requestId: lastAIRequestId, text: 'SELECT u.id, u.email\n' })
+    emit('ai:delta', { requestId: lastAIRequestId, text: "FROM users u\nWHERE u.last_login < NOW() - INTERVAL 7 DAY\nORDER BY u.id;" })
+    emit('ai:status', { requestId: lastAIRequestId, phase: 'done' })
+    return {
+      sql: 'SELECT u.id, u.email\nFROM users u\nWHERE u.last_login < NOW() - INTERVAL 7 DAY\nORDER BY u.id;',
+      explanation: '按最近登录时间筛选 7 天内未登录的用户；结果行需人工复核后再执行。',
+      warnings: [],
+      provider: 'ollama',
+      model: 'qwen2.5-coder:7b',
+      durationMs: 860,
+      promptChars: 1860,
+      responseChars: 210,
+      isWrite: false,
+      multiStatement: false,
+      dangerous: false,
+      uncertain: false,
+      insertAllowed: true,
+      insertBlockReason: '',
+    }
+  },
+  AICancel: async () => undefined,
+  AISaveConfig: async () => undefined,
+  AITestConnection: async () => undefined,
+  AIDeleteKey: async () => undefined,
+  AIClearConsents: async () => undefined,
   DBQuery: async () => ({ columns: ['id', 'name', 'created_at'], rows: [['1', 'alice', '2026-01-01 10:00:00'], ['2', null, '2026-01-02 11:30:00']], affected: 0, durationMs: 3, truncated: false }),
   RedisScanKeys: async () => ({ keys: [
     { key: 'user:1:name', ttl: 120, type: 'string' },

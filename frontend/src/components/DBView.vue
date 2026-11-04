@@ -26,10 +26,12 @@ import * as models from '../../wailsjs/go/models'
 import DBConnModal from './DBConnModal.vue'
 import ColumnModal from './ColumnModal.vue'
 import IndexModal from './IndexModal.vue'
+import AIPanel from './AIPanel.vue'
+import AISettingsModal from './AISettingsModal.vue'
 
 // 数据库视图（HeidiSQL 风格）：
 // 左：连接 → 库 → 表 树；右：SQL 工作台（编辑器 + 结果/结构）或 Redis 值查看器
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
 
@@ -277,6 +279,8 @@ interface WorkTab {
   gridSortDir: 1 | -1
   selectedRow: number
   selectedCol: number
+  // AI 助手侧栏是否展开（按查询标签保存，仅前端状态）
+  aiOpen: boolean
 }
 
 let tabSeq = 0
@@ -318,6 +322,7 @@ function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
     gridSortDir: 1,
     selectedRow: -1,
     selectedCol: -1,
+    aiOpen: false,
     ...init,
   })
 }
@@ -546,6 +551,44 @@ async function runQueryTab(tab: WorkTab) {
   } finally {
     tab.loading = false
   }
+}
+
+// ---------- AI 助手 ----------
+
+const aiSettingsOpen = ref(false)
+const aiPanelRef = ref<InstanceType<typeof AIPanel> | null>(null)
+const sqlEditorEl = ref<HTMLTextAreaElement | null>(null)
+const uiLocale = computed(() => String(locale.value))
+
+function toggleAI(tab: WorkTab) {
+  tab.aiOpen = !tab.aiOpen
+}
+
+// 插入编辑器：用 setRangeText（保留 undo 栈），再派发 input 事件同步 v-model。
+// 不直接改 tab.sql，避免丢失光标位置与撤销历史。
+function insertAIText(tab: WorkTab, text: string) {
+  const clean = text.trim()
+  if (!clean) return
+  const el = sqlEditorEl.value
+  if (!el) {
+    tab.sql = clean
+    return
+  }
+  el.focus()
+  const start = el.selectionStart ?? el.value.length
+  const end = el.selectionEnd ?? start
+  // 若前后不是空白/换行，补换行，避免和已有 SQL 粘成一条无效语句
+  const before = el.value.slice(0, start)
+  const after = el.value.slice(end)
+  const prefix = before.length > 0 && !/\s$/.test(before) ? '\n' : ''
+  const suffix = after.length > 0 && !/^\s/.test(after) ? '\n' : ''
+  el.setRangeText(prefix + clean + suffix, start, end, 'end')
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+  message.success(t('ai.inserted'))
+}
+
+function onAISettingsSaved() {
+  void aiPanelRef.value?.reloadConfig()
 }
 
 // 结果网格
@@ -994,6 +1037,11 @@ watch(activeId, () => {
     if (isRedis.value) void loadRedisFirstPage()
     else {
       openQuery()
+      // 仅浏览器预览调试用：?ai=1 展开 AI 侧栏
+      if (typeof window !== 'undefined' && new URLSearchParams(location.search).get('ai') === '1') {
+        const qtab = tabs.value.find((x) => x.kind === 'query')
+        if (qtab) qtab.aiOpen = true
+      }
       // 仅浏览器预览调试用：?autodata=1 自动打开第一张表的数据标签
       if (typeof window !== 'undefined' && new URLSearchParams(location.search).get('autodata') === '1') {
         void (async () => {
@@ -1287,79 +1335,108 @@ void load()
             <n-button size="small" :disabled="!(activeTab.result?.columns?.length)" @click="exportCSV(activeTab)">
               CSV
             </n-button>
+            <n-button
+              size="small"
+              :type="activeTab.aiOpen ? 'primary' : 'default'"
+              secondary
+              @click="toggleAI(activeTab)"
+            >
+              {{ t('ai.open') }}
+            </n-button>
+            <n-button size="small" quaternary :title="t('ai.settings')" @click="aiSettingsOpen = true">
+              ⚙
+            </n-button>
           </div>
 
-          <textarea
-            v-model="activeTab.sql"
-            class="sql-editor"
-            spellcheck="false"
-            :placeholder="t('db.sqlPlaceholder')"
-            @keydown.ctrl.enter.prevent="runQueryTab(activeTab)"
-            @keydown.meta.enter.prevent="runQueryTab(activeTab)"
-          />
+          <div class="query-body" @keydown.ctrl.k.prevent="toggleAI(activeTab)">
+            <div class="query-main">
+              <textarea
+                ref="sqlEditorEl"
+                v-model="activeTab.sql"
+                class="sql-editor"
+                spellcheck="false"
+                :placeholder="t('db.sqlPlaceholder')"
+                @keydown.ctrl.enter.prevent="runQueryTab(activeTab)"
+                @keydown.meta.enter.prevent="runQueryTab(activeTab)"
+              />
 
-          <div class="result">
-            <div v-if="activeTab.error" class="query-error">{{ activeTab.error }}</div>
-            <div v-else-if="!activeTab.result" class="result-empty">
-              <div class="empty-glyph">⌘</div>
-              <div>{{ t('db.noResult') }}</div>
-              <div class="empty-hint">{{ t('db.runHint') }}</div>
-            </div>
-            <template v-else-if="(activeTab.result.columns?.length ?? 0) > 0">
-              <div class="result-meta">
-                {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
-                <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
-                <span class="spacer" />
-                <span class="hint">{{ t('db.clickSort') }}</span>
+              <div class="result">
+                <div v-if="activeTab.error" class="query-error">{{ activeTab.error }}</div>
+                <div v-else-if="!activeTab.result" class="result-empty">
+                  <div class="empty-glyph">⌘</div>
+                  <div>{{ t('db.noResult') }}</div>
+                  <div class="empty-hint">{{ t('db.runHint') }}</div>
+                </div>
+                <template v-else-if="(activeTab.result.columns?.length ?? 0) > 0">
+                  <div class="result-meta">
+                    {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
+                    <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
+                    <span class="spacer" />
+                    <span class="hint">{{ t('db.clickSort') }}</span>
+                  </div>
+                  <div class="grid-wrap">
+                    <table class="grid">
+                      <thead>
+                        <tr>
+                          <th class="rownum">#</th>
+                          <th v-for="(c, ci) in activeTab.result.columns" :key="c" class="sortable" @click="toggleGridSort(activeTab, ci)">
+                            {{ c }}
+                            <span v-if="activeTab.gridSortCol === ci" class="sort">{{ activeTab.gridSortDir === 1 ? '▲' : '▼' }}</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="(row, ri) in sortedRows(activeTab)" :key="ri">
+                          <td class="rownum">{{ ri + 1 }}</td>
+                          <td
+                            v-for="(cell, ci) in row"
+                            :key="ci"
+                            :class="{
+                              null: cell === null,
+                              selected: activeTab.selectedRow === ri && activeTab.selectedCol === ci,
+                            }"
+                            @click="copyCell(activeTab, ri, ci)"
+                          >
+                            {{ cell === null ? 'NULL' : cell }}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </template>
+                <div v-else class="result-meta">
+                  {{ t('db.affected', { n: activeTab.result.affected }) }} · {{ activeTab.result.durationMs }}ms
+                </div>
               </div>
-              <div class="grid-wrap">
-                <table class="grid">
-                  <thead>
-                    <tr>
-                      <th class="rownum">#</th>
-                      <th v-for="(c, ci) in activeTab.result.columns" :key="c" class="sortable" @click="toggleGridSort(activeTab, ci)">
-                        {{ c }}
-                        <span v-if="activeTab.gridSortCol === ci" class="sort">{{ activeTab.gridSortDir === 1 ? '▲' : '▼' }}</span>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="(row, ri) in sortedRows(activeTab)" :key="ri">
-                      <td class="rownum">{{ ri + 1 }}</td>
-                      <td
-                        v-for="(cell, ci) in row"
-                        :key="ci"
-                        :class="{
-                          null: cell === null,
-                          selected: activeTab.selectedRow === ri && activeTab.selectedCol === ci,
-                        }"
-                        @click="copyCell(activeTab, ri, ci)"
-                      >
-                        {{ cell === null ? 'NULL' : cell }}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </template>
-            <div v-else class="result-meta">
-              {{ t('db.affected', { n: activeTab.result.affected }) }} · {{ activeTab.result.durationMs }}ms
-            </div>
-          </div>
 
-          <div v-if="history.length" class="history">
-            <div class="history-head">{{ t('db.history') }}</div>
-            <div class="history-list">
-              <div
-                v-for="(h, i) in history.slice(0, 6)"
-                :key="i"
-                class="history-item"
-                :title="h"
-                @click="activeTab.sql = h"
-              >
-                {{ h }}
+              <div v-if="history.length" class="history">
+                <div class="history-head">{{ t('db.history') }}</div>
+                <div class="history-list">
+                  <div
+                    v-for="(h, i) in history.slice(0, 6)"
+                    :key="i"
+                    class="history-item"
+                    :title="h"
+                    @click="activeTab.sql = h"
+                  >
+                    {{ h }}
+                  </div>
+                </div>
               </div>
             </div>
+
+            <AIPanel
+              v-if="activeTab.aiOpen"
+              ref="aiPanelRef"
+              :conn-id="activeTab.connId"
+              :default-database="activeTab.database || (active?.dbName ?? '')"
+              :sql="activeTab.sql"
+              :last-error="activeTab.error"
+              :locale="uiLocale"
+              @close="activeTab.aiOpen = false"
+              @insert="insertAIText(activeTab, $event)"
+              @configure="aiSettingsOpen = true"
+            />
           </div>
         </template>
 
@@ -1573,6 +1650,7 @@ void load()
     </div>
 
     <DBConnModal v-model:show="modal" :conn="editing" @saved="onSaved" />
+    <AISettingsModal v-model:show="aiSettingsOpen" @saved="onAISettingsSaved" />
     <ColumnModal
       v-model:show="colModal.show"
       :mode="colModal.mode"
@@ -1893,6 +1971,19 @@ void load()
 }
 .spacer {
   flex: 1;
+}
+/* 查询标签：编辑器/结果 + AI 侧栏左右分栏 */
+.query-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.query-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 .sql-editor {
   width: 100%;
