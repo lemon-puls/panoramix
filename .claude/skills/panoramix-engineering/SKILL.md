@@ -145,8 +145,10 @@ description: Panoramix 工程实现技能包。包含技术栈、架构约束与
 
 ### 信号量缩容不能替换 channel
 - 现象：并发 2→1 后短暂出现 2 个请求同时打到 provider；或旧 token 释放后计数错乱
-- 根因：channel 被替换，但在途 token 还留在旧 channel
-- 解法：仅当 `len(ch)==0` 时才替换 channel；忙碌时保留旧容量，等空闲再调整
+- 根因：channel 被替换，但在途 token 还留在旧 channel；仅判断 `len==0` 仍有竞态
+- 解法：用带等待队列的信号量（`active/limit/waiters` + wake channel）。
+  resize 只改 limit：缩容不影响在途请求，扩容立即唤醒 waiter；被唤醒者重新竞争。
+  不要用“替换 buffered channel”的方案
 
 ### MySQL 版本注释是可执行 SQL
 - 现象：`/*!50000 UPDATE ... */` 被当成普通注释，判定为只读

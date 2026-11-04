@@ -608,16 +608,54 @@ func TestAIGateResizeKeepsInFlightToken(t *testing.T) {
 	if !g.tryAcquire() {
 		t.Fatal("first acquire should succeed")
 	}
-	// 有 token 在途时缩容：不得替换 channel，也不得丢失在途 token
+	// 有请求在途时缩容：不得丢失在途计数
 	g.resize(1)
 	g.release() // 不应阻塞
-	g.resize(1) // 空闲后可以真正缩容
+	g.resize(1) // 空闲后缩容生效
 
 	if !g.tryAcquire() {
 		t.Fatal("first acquire after resize should succeed")
 	}
 	if g.tryAcquire() {
-		t.Fatal("concurrency limit should be 1 after idle resize")
+		t.Fatal("concurrency limit should be 1 after resize")
+	}
+	g.release()
+}
+
+func TestAIGateResizeWakesWaiter(t *testing.T) {
+	g := newAIGate(1)
+	if !g.tryAcquire() {
+		t.Fatal("first acquire should succeed")
+	}
+	done := make(chan error, 1)
+	go func() { done <- g.acquire(context.Background()) }()
+	time.Sleep(30 * time.Millisecond) // 让 waiter 入队
+	g.resize(2)                       // 扩容应立即唤醒 waiter
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waiter acquire: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resize should wake a queued waiter")
+	}
+	g.release()
+	g.release()
+}
+
+func TestAIGateAcquireCanceledLeavesNoWaiter(t *testing.T) {
+	g := newAIGate(1)
+	if !g.tryAcquire() {
+		t.Fatal("first acquire should succeed")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := g.acquire(ctx); err == nil {
+		t.Fatal("canceled acquire should fail")
+	}
+	g.release()
+	if !g.tryAcquire() {
+		t.Fatal("slot should be available after release")
 	}
 	g.release()
 }

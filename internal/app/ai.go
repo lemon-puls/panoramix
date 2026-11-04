@@ -775,57 +775,92 @@ func redactSQLError(err error) string {
 
 // aiGate 限制同时打到模型的请求数（默认 1）。
 // 本地 7B 模型对并发极其敏感；多标签同时生成会直接打爆显存。
+//
+// 用带等待队列的信号量实现（而不是可替换的 buffered channel）：
+// 配置并发 2→1 时不能丢失在途请求的计数，也不能让新请求越过旧请求。
 type aiGate struct {
-	ch chan struct{}
-	mu sync.Mutex
+	mu      sync.Mutex
+	limit   int
+	active  int
+	waiters []chan struct{}
 }
 
 func newAIGate(n int) *aiGate {
 	if n < 1 {
 		n = 1
 	}
-	return &aiGate{ch: make(chan struct{}, n)}
+	return &aiGate{limit: n}
 }
 
 func (g *aiGate) tryAcquire() bool {
-	select {
-	case g.ch <- struct{}{}:
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.active < g.limit {
+		g.active++
 		return true
-	default:
-		return false
 	}
+	return false
 }
 
+// acquire 在达到并发上限时排队；ctx 取消时从等待队列移除并返回错误。
 func (g *aiGate) acquire(ctx context.Context) error {
-	select {
-	case g.ch <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		g.mu.Lock()
+		if g.active < g.limit {
+			g.active++
+			g.mu.Unlock()
+			return nil
+		}
+		ch := make(chan struct{})
+		g.waiters = append(g.waiters, ch)
+		g.mu.Unlock()
+
+		select {
+		case <-ch:
+			// 被唤醒后重新竞争（可能被其它 waiter 先拿到）
+		case <-ctx.Done():
+			g.mu.Lock()
+			for i, w := range g.waiters {
+				if w == ch {
+					g.waiters = append(g.waiters[:i], g.waiters[i+1:]...)
+					break
+				}
+			}
+			g.mu.Unlock()
+			return ctx.Err()
+		}
 	}
 }
 
 func (g *aiGate) release() {
-	select {
-	case <-g.ch:
-	default:
+	g.mu.Lock()
+	if g.active > 0 {
+		g.active--
 	}
+	g.wakeLocked()
+	g.mu.Unlock()
 }
 
-// resize 在空闲时调整并发上限；忙碌时保持旧容量，等待后续空闲调用再调整。
-// 不能在有 token 在途时替换 channel，否则在途 token 会丢失，导致并发上限失效。
+// resize 调整并发上限；缩容不会影响在途请求，扩容会立即唤醒等待者。
 func (g *aiGate) resize(n int) {
 	if n < 1 {
 		n = 1
 	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	if cap(g.ch) == n {
-		return
+	g.limit = n
+	g.wakeLocked()
+	g.mu.Unlock()
+}
+
+// wakeLocked 在有空位时唤醒队首等待者（调用方必须持锁）。
+// 被唤醒者会重新检查 active<limit，避免惊群或超额。
+func (g *aiGate) wakeLocked() {
+	if g.active < g.limit && len(g.waiters) > 0 {
+		ch := g.waiters[0]
+		g.waiters = g.waiters[1:]
+		close(ch)
 	}
-	if len(g.ch) != 0 {
-		// 有请求在途：保留旧 channel，下一次保存配置/请求时再尝试
-		return
-	}
-	g.ch = make(chan struct{}, n)
 }
