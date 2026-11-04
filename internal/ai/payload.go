@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 )
@@ -58,12 +59,13 @@ type BuildInput struct {
 
 // Built 构建结果（system/user 原文 + 展示用摘要）
 type Built struct {
-	SystemPrompt string
-	UserPrompt   string
-	SchemaChars  int
-	PromptChars  int
-	Tables       []TablePreview
-	Warnings     []Warning
+	SystemPrompt   string
+	UserPrompt     string
+	SchemaChars    int
+	PromptChars    int
+	Tables         []TablePreview
+	Warnings       []Warning
+	SensitiveHints []SensitiveHint
 }
 
 // BuildPayload 构造将发送给模型的 system/user prompt。
@@ -142,12 +144,13 @@ func BuildPayload(in BuildInput) (*Built, error) {
 
 	payload := "[system]\n" + system + "\n\n[user]\n" + user
 	return &Built{
-		SystemPrompt: system,
-		UserPrompt:   user,
-		SchemaChars:  total,
-		PromptChars:  utf8.RuneCountInString(payload),
-		Tables:       previews,
-		Warnings:     dedupeWarnings(warnings),
+		SystemPrompt:   system,
+		UserPrompt:     user,
+		SchemaChars:    total,
+		PromptChars:    utf8.RuneCountInString(payload),
+		Tables:         previews,
+		Warnings:       dedupeWarnings(warnings),
+		SensitiveHints: detectSensitiveHints(question, sqlText, errText),
 	}, nil
 }
 
@@ -257,6 +260,52 @@ func dedupeWarnings(in []Warning) []Warning {
 		}
 		seen[key] = true
 		out = append(out, w)
+	}
+	return out
+}
+
+var (
+	rePasswordAssign = regexp.MustCompile(`(?i)\b(?:password|passwd|pwd)\s*=`)
+	reSecretAssign   = regexp.MustCompile(`(?i)\b(?:token|secret|api[_-]?key|access[_-]?key|credential)\s*=`)
+	reBearerToken    = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
+	rePrivateKey     = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
+	reAWSAccessKey   = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
+	reEmailAddress   = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+)
+
+// detectSensitiveHints 检测用户输入中的疑似敏感内容。
+// 只返回字段与类型，不返回命中值；不自动删改用户输入（设计已接受该残余风险）。
+func detectSensitiveHints(question, sqlText, errorText string) []SensitiveHint {
+	type check struct {
+		kind string
+		re   *regexp.Regexp
+	}
+	checks := []check{
+		{SensitivePasswordAssignment, rePasswordAssign},
+		{SensitiveSecretAssignment, reSecretAssign},
+		{SensitiveBearerToken, reBearerToken},
+		{SensitivePrivateKey, rePrivateKey},
+		{SensitiveAWSAccessKey, reAWSAccessKey},
+		{SensitiveEmail, reEmailAddress},
+	}
+	fields := []struct {
+		name string
+		text string
+	}{
+		{"question", question},
+		{"sql", sqlText},
+		{"error", errorText},
+	}
+	var out []SensitiveHint
+	for _, f := range fields {
+		if f.text == "" {
+			continue
+		}
+		for _, c := range checks {
+			if c.re.MatchString(f.text) {
+				out = append(out, SensitiveHint{Field: f.name, Kind: c.kind})
+			}
+		}
 	}
 	return out
 }

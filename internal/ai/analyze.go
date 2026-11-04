@@ -64,6 +64,9 @@ var readKeywords = map[string]bool{
 // scanSQL 做一次引号/反引号/注释感知的扫描，返回语句词流与“去字面量”的文本。
 // 不追求完整 SQL 解析，只覆盖安全判定需要的关键字/分号结构。
 func scanSQL(sql string) ([]scanStmt, string) {
+	// MySQL 会执行 /*!NNNNN ... */ 版本注释中的内容；先展开再分析，
+	// 避免把 `/*!50000 UPDATE ... */` 误判为只读。
+	sql = unwrapVersionComments(sql)
 	var stmts []scanStmt
 	var cur scanStmt
 	var word strings.Builder
@@ -181,6 +184,93 @@ func scanSQL(sql string) ([]scanStmt, string) {
 
 func isWordRune(r rune) bool {
 	return r == '_' || r == '$' || unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// unwrapVersionComments 把 MySQL 可执行版本注释 /*!50000 ... */ 展开为普通 SQL：
+// 去掉 /*!、版本号与结尾 */，保留中间内容；普通 /* ... */ 注释保持原样。
+// 字符串、反引号与行注释内的内容不受影响。
+func unwrapVersionComments(sql string) string {
+	var b strings.Builder
+	b.Grow(len(sql))
+	i, n := 0, len(sql)
+	for i < n {
+		c := sql[i]
+		switch {
+		case c == '\'' || c == '"':
+			quote := c
+			b.WriteByte(c)
+			i++
+			for i < n {
+				b.WriteByte(sql[i])
+				if sql[i] == '\\' && i+1 < n {
+					i++
+					b.WriteByte(sql[i])
+					i++
+					continue
+				}
+				if sql[i] == quote {
+					i++
+					break
+				}
+				i++
+			}
+		case c == '`':
+			b.WriteByte(c)
+			i++
+			for i < n {
+				b.WriteByte(sql[i])
+				if sql[i] == '`' {
+					i++
+					break
+				}
+				i++
+			}
+		case c == '-' && i+1 < n && sql[i+1] == '-':
+			for i < n && sql[i] != '\n' {
+				b.WriteByte(sql[i])
+				i++
+			}
+		case c == '#':
+			for i < n && sql[i] != '\n' {
+				b.WriteByte(sql[i])
+				i++
+			}
+		case c == '/' && i+1 < n && sql[i+1] == '*':
+			if i+2 < n && sql[i+2] == '!' {
+				rel := strings.Index(sql[i+3:], "*/")
+				if rel < 0 {
+					// 未闭合：丢弃标记，保留剩余内容继续扫描
+					b.WriteByte(' ')
+					i += 3
+					continue
+				}
+				contentEnd := i + 3 + rel
+				content := sql[i+3 : contentEnd]
+				j := 0
+				for j < len(content) && content[j] >= '0' && content[j] <= '9' {
+					j++
+				}
+				b.WriteByte(' ')
+				b.WriteString(content[j:])
+				b.WriteByte(' ')
+				i = contentEnd + 2
+			} else {
+				rel := strings.Index(sql[i+2:], "*/")
+				if rel < 0 {
+					b.WriteString(sql[i:])
+					i = n
+					continue
+				}
+				endPos := i + 2 + rel + 2
+				b.WriteString(sql[i:endPos])
+				i = endPos
+			}
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
 }
 
 func containsPhrase(words []wordAt, phrase ...string) bool {

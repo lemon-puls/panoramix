@@ -85,6 +85,37 @@ func TestAnalyzeIgnoresCommentsAndStringsForKeywords(t *testing.T) {
 	}
 }
 
+func TestAnalyzeVersionComments(t *testing.T) {
+	cases := []struct {
+		name       string
+		sql        string
+		wantWrite  bool
+		wantDanger bool
+		wantMulti  bool
+	}{
+		{name: "version update", sql: "/*!50000 UPDATE users SET a=1 */", wantWrite: true},
+		{name: "version set", sql: "/*!40101 SET NAMES utf8 */", wantWrite: true},
+		{name: "version outfile", sql: "SELECT 1 /*!50000 INTO OUTFILE '/tmp/x'*/", wantDanger: true},
+		{name: "version multi", sql: "/*!40101 SET NAMES utf8 */; SELECT 1", wantWrite: true, wantMulti: true},
+		{name: "ordinary comment", sql: "/* UPDATE users SET a=1 */ SELECT 1", wantWrite: false},
+		{name: "version inside string", sql: "SELECT '/*!50000 UPDATE users */' AS x", wantWrite: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := Analyze(tc.sql)
+			if a.IsWrite != tc.wantWrite {
+				t.Fatalf("IsWrite = %v, want %v (%+v)", a.IsWrite, tc.wantWrite, a)
+			}
+			if a.Dangerous != tc.wantDanger {
+				t.Fatalf("Dangerous = %v, want %v (%+v)", a.Dangerous, tc.wantDanger, a)
+			}
+			if a.MultiStatement != tc.wantMulti {
+				t.Fatalf("MultiStatement = %v, want %v (%+v)", a.MultiStatement, tc.wantMulti, a)
+			}
+		})
+	}
+}
+
 func TestParseResponse(t *testing.T) {
 	cases := []struct {
 		name     string

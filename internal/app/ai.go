@@ -395,23 +395,24 @@ func (s *Service) AIPrepare(req ai.Request) (*ai.Prepared, error) {
 
 	payload := "[system]\n" + built.SystemPrompt + "\n\n[user]\n" + built.UserPrompt
 	prepared := &ai.Prepared{
-		PrepareID:    store.NewID(),
-		RequestID:    req.RequestID,
-		Payload:      payload,
-		PayloadHash:  ai.PayloadHash(payload),
-		PromptChars:  built.PromptChars,
-		SchemaChars:  built.SchemaChars,
-		Tables:       previews,
-		Warnings:     warnings,
-		Endpoint:     ep.Normalized,
-		EndpointHash: ep.Hash,
-		Scope:        ep.Scope,
-		Provider:     cfg.Provider,
-		Model:        cfg.Model,
-		NeedsConsent: ep.Scope != ai.ScopeLocal && !s.hasCloudConsent(ep.Hash),
-		ExpiresInSec: int(s.ai.prepareTTL / time.Second),
-		AllowWrite:   cfg.AllowWrite,
-		Mode:         req.Mode,
+		PrepareID:      store.NewID(),
+		RequestID:      req.RequestID,
+		Payload:        payload,
+		PayloadHash:    ai.PayloadHash(payload),
+		PromptChars:    built.PromptChars,
+		SchemaChars:    built.SchemaChars,
+		Tables:         previews,
+		Warnings:       warnings,
+		SensitiveHints: built.SensitiveHints,
+		Endpoint:       ep.Normalized,
+		EndpointHash:   ep.Hash,
+		Scope:          ep.Scope,
+		Provider:       cfg.Provider,
+		Model:          cfg.Model,
+		NeedsConsent:   ep.Scope != ai.ScopeLocal && !s.hasCloudConsent(ep.Hash),
+		ExpiresInSec:   int(s.ai.prepareTTL / time.Second),
+		AllowWrite:     cfg.AllowWrite,
+		Mode:           req.Mode,
 	}
 	entry := &preparedAI{
 		prepared:   prepared,
@@ -494,10 +495,13 @@ func (s *Service) AIGenerate(prepareID string, consent bool) (*ai.Result, error)
 	if curEp.Hash != entry.endpoint.Hash || cur.Model != entry.cfg.Model {
 		return nil, aiError("config_changed", "configuration changed; preview again")
 	}
-	if entry.prepared.NeedsConsent && !consent {
-		return nil, aiError("consent_required", entry.endpoint.Normalized)
-	}
-	if consent && entry.endpoint.Scope != ai.ScopeLocal {
+	// 发送前按“当前”授权状态重新判定，而不是信任 Prepare 时的快照：
+	// 用户在预览后执行了「清除云端授权」时，旧预览不得继续发往非本机 endpoint。
+	needsConsentNow := entry.endpoint.Scope != ai.ScopeLocal && !s.hasCloudConsent(entry.endpoint.Hash)
+	if needsConsentNow {
+		if !consent {
+			return nil, aiError("consent_required", entry.endpoint.Normalized)
+		}
 		s.grantCloudConsent(entry.endpoint.Hash, entry.endpoint.Normalized)
 	}
 
@@ -808,7 +812,8 @@ func (g *aiGate) release() {
 	}
 }
 
-// resize 在空闲时调整并发上限；忙碌时保持旧容量，下一次空闲调用再调整。
+// resize 在空闲时调整并发上限；忙碌时保持旧容量，等待后续空闲调用再调整。
+// 不能在有 token 在途时替换 channel，否则在途 token 会丢失，导致并发上限失效。
 func (g *aiGate) resize(n int) {
 	if n < 1 {
 		n = 1
@@ -818,11 +823,9 @@ func (g *aiGate) resize(n int) {
 	if cap(g.ch) == n {
 		return
 	}
-	select {
-	case g.ch <- struct{}{}:
-		<-g.ch
-		g.ch = make(chan struct{}, n)
-	default:
-		// 有请求在途，等待后续调用
+	if len(g.ch) != 0 {
+		// 有请求在途：保留旧 channel，下一次保存配置/请求时再尝试
+		return
 	}
+	g.ch = make(chan struct{}, n)
 }

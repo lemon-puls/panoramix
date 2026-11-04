@@ -2,6 +2,7 @@ package ai
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -178,5 +179,54 @@ func TestPayloadHashStable(t *testing.T) {
 	c := PayloadHash("abd")
 	if a != b || a == c || len(a) != 16 {
 		t.Fatalf("unstable hash: %s %s %s", a, b, c)
+	}
+}
+
+func TestBuildPayloadSensitiveHints(t *testing.T) {
+	built, err := BuildPayload(BuildInput{
+		Mode:     ModeFix,
+		SQL:      "-----BEGIN RSA PRIVATE KEY-----\nabc",
+		Error:    "Authorization: Bearer sk-abc123",
+		Question: "password=hunter2 contact a@b.com key AKIAIOSFODNN7EXAMPLE",
+	})
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	want := map[string]string{
+		SensitivePasswordAssignment: "question",
+		SensitiveEmail:              "question",
+		SensitiveAWSAccessKey:       "question",
+		SensitivePrivateKey:         "sql",
+		SensitiveBearerToken:        "error",
+	}
+	if len(built.SensitiveHints) < len(want) {
+		t.Fatalf("missing hints: %+v", built.SensitiveHints)
+	}
+	for _, h := range built.SensitiveHints {
+		if f, ok := want[h.Kind]; ok && f != h.Field {
+			t.Fatalf("hint %s field = %s, want %s", h.Kind, h.Field, f)
+		}
+	}
+	for kind := range want {
+		found := false
+		for _, h := range built.SensitiveHints {
+			if h.Kind == kind {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing hint kind %s: %+v", kind, built.SensitiveHints)
+		}
+	}
+	// 提示只含字段/类型，绝不回显命中内容
+	dump := fmt.Sprintf("%v", built.SensitiveHints)
+	for _, secret := range []string{"hunter2", "a@b.com", "sk-abc123", "AKIAIOSFODNN7EXAMPLE", "BEGIN RSA"} {
+		if strings.Contains(dump, secret) {
+			t.Fatalf("sensitive hint leaked %q: %s", secret, dump)
+		}
+	}
+	// 用户输入不被自动删改（payload 仍包含原文）
+	if !strings.Contains(built.UserPrompt, "hunter2") {
+		t.Fatal("user input must not be modified automatically")
 	}
 }

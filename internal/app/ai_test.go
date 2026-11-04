@@ -553,6 +553,75 @@ func TestAIAutoMatchDoesNotSendUnrequestedSchema(t *testing.T) {
 	}
 }
 
+func TestAIGenerateRechecksConsentAtSend(t *testing.T) {
+	svc, _, _, _ := newAITestService(t)
+	conn := createMySQLConn(t, svc, "demo")
+	fake := &fakeClient{resp: "```sql\nSELECT 1;\n```"}
+	useFakeClient(svc, fake)
+	saveAIConfig(t, svc, "https://api.example.com/v1", "m", false, "k")
+
+	// 先授权一次，让后续 Prepare 的 NeedsConsent 快照为 false
+	p1, err := svc.AIPrepare(aiReq(conn.ID))
+	if err != nil {
+		t.Fatalf("prepare 1: %v", err)
+	}
+	if _, err := svc.AIGenerate(p1.PrepareID, true); err != nil {
+		t.Fatalf("generate 1: %v", err)
+	}
+	p2, err := svc.AIPrepare(aiReq(conn.ID))
+	if err != nil {
+		t.Fatalf("prepare 2: %v", err)
+	}
+	if p2.NeedsConsent {
+		t.Fatal("expected consent to be remembered at prepare time")
+	}
+
+	// 预览后清除授权：旧预览不得继续发送
+	if err := svc.AIClearConsents(); err != nil {
+		t.Fatalf("clear consents: %v", err)
+	}
+	fake.mu.Lock()
+	before := len(fake.calls)
+	fake.mu.Unlock()
+	if _, err := svc.AIGenerate(p2.PrepareID, false); err == nil || !strings.HasPrefix(err.Error(), "consent_required") {
+		t.Fatalf("stale preview must be rejected after consent cleared, got %v", err)
+	}
+	fake.mu.Lock()
+	after := len(fake.calls)
+	fake.mu.Unlock()
+	if after != before {
+		t.Fatal("rejected request must not reach the provider")
+	}
+
+	// 用户在新预览上确认后可以重新授权
+	p3, _ := svc.AIPrepare(aiReq(conn.ID))
+	if !p3.NeedsConsent {
+		t.Fatal("new prepare should require consent again")
+	}
+	if _, err := svc.AIGenerate(p3.PrepareID, true); err != nil {
+		t.Fatalf("generate with fresh consent: %v", err)
+	}
+}
+
+func TestAIGateResizeKeepsInFlightToken(t *testing.T) {
+	g := newAIGate(2)
+	if !g.tryAcquire() {
+		t.Fatal("first acquire should succeed")
+	}
+	// 有 token 在途时缩容：不得替换 channel，也不得丢失在途 token
+	g.resize(1)
+	g.release() // 不应阻塞
+	g.resize(1) // 空闲后可以真正缩容
+
+	if !g.tryAcquire() {
+		t.Fatal("first acquire after resize should succeed")
+	}
+	if g.tryAcquire() {
+		t.Fatal("concurrency limit should be 1 after idle resize")
+	}
+	g.release()
+}
+
 func TestAIWriteAndMultiStatementBlocked(t *testing.T) {
 	svc, _, _, _ := newAITestService(t)
 	conn := createMySQLConn(t, svc, "demo")

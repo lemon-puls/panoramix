@@ -107,6 +107,23 @@ type Warning struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// SensitiveHint 疑似敏感内容的“字段 + 类型”提示。
+// 刻意不包含命中内容本身：预览里已经能看到原文，这里只做提示，不自动删改。
+type SensitiveHint struct {
+	Field string `json:"field"` // question | sql | error
+	Kind  string `json:"kind"`  // password_assignment | secret_assignment | ...
+}
+
+// 敏感内容类型
+const (
+	SensitivePasswordAssignment = "password_assignment"
+	SensitiveSecretAssignment   = "secret_assignment"
+	SensitiveBearerToken        = "bearer_token"
+	SensitivePrivateKey         = "private_key"
+	SensitiveAWSAccessKey       = "aws_access_key"
+	SensitiveEmail              = "email_address"
+)
+
 // 警告代码
 const (
 	WarnViewExcluded         = "view_excluded"
@@ -134,23 +151,24 @@ type TablePreview struct {
 // Prepared 两阶段协议的第一阶段结果：
 // payload 已构建并缓存；AIGenerate 只发送这份缓存原文，保证“预览 = 实发”。
 type Prepared struct {
-	PrepareID    string         `json:"prepareId"`
-	RequestID    string         `json:"requestId"`
-	Payload      string         `json:"payload"`     // 完整发送内容（system + user）
-	PayloadHash  string         `json:"payloadHash"` // sha256 前 16 位，前端展示一致性
-	PromptChars  int            `json:"promptChars"`
-	SchemaChars  int            `json:"schemaChars"`
-	Tables       []TablePreview `json:"tables"`
-	Warnings     []Warning      `json:"warnings"`
-	Endpoint     string         `json:"endpoint"`
-	EndpointHash string         `json:"endpointHash"`
-	Scope        Scope          `json:"scope"`
-	Provider     ProviderKind   `json:"provider"`
-	Model        string         `json:"model"`
-	NeedsConsent bool           `json:"needsConsent"` // 云端且该 endpoint 尚未授权
-	ExpiresInSec int            `json:"expiresInSec"`
-	AllowWrite   bool           `json:"allowWrite"`
-	Mode         Mode           `json:"mode"`
+	PrepareID      string          `json:"prepareId"`
+	RequestID      string          `json:"requestId"`
+	Payload        string          `json:"payload"`     // 完整发送内容（system + user）
+	PayloadHash    string          `json:"payloadHash"` // sha256 前 16 位，前端展示一致性
+	PromptChars    int             `json:"promptChars"`
+	SchemaChars    int             `json:"schemaChars"`
+	Tables         []TablePreview  `json:"tables"`
+	Warnings       []Warning       `json:"warnings"`
+	SensitiveHints []SensitiveHint `json:"sensitiveHints"` // 仅提示，不自动删改用户输入
+	Endpoint       string          `json:"endpoint"`
+	EndpointHash   string          `json:"endpointHash"`
+	Scope          Scope           `json:"scope"`
+	Provider       ProviderKind    `json:"provider"`
+	Model          string          `json:"model"`
+	NeedsConsent   bool            `json:"needsConsent"` // 云端且该 endpoint 尚未授权
+	ExpiresInSec   int             `json:"expiresInSec"`
+	AllowWrite     bool            `json:"allowWrite"`
+	Mode           Mode            `json:"mode"`
 }
 
 // Result 模型返回的解析结果（已做多语句/写操作判定）
