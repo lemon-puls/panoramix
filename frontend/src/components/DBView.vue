@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, reactive, ref, watch } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
 import { NButton, NInput, NInputNumber } from 'naive-ui'
@@ -992,11 +992,25 @@ watch(activeId, () => {
   redisSelected.value = ''
   if (active.value) {
     if (isRedis.value) void loadRedisFirstPage()
-    else openQuery()
+    else {
+      openQuery()
+      // 仅浏览器预览调试用：?autodata=1 自动打开第一张表的数据标签
+      if (typeof window !== 'undefined' && new URLSearchParams(location.search).get('autodata') === '1') {
+        void (async () => {
+          await toggleConn()
+          const db = databases.value[0]
+          if (!db) return
+          await toggleDb(db)
+          const tbl = tablesByDb[db]?.[0]
+          if (tbl) await openTableData(db, tbl)
+        })()
+      }
+    }
   }
 })
 
 void load()
+
 </script>
 
 <template>
@@ -1174,7 +1188,7 @@ void load()
             </n-button>
             <span class="edit-actions" :class="{ active: activeTab.pending.length > 0 }">
               <button
-                class="edit-btn apply"
+                class="cell-edit-btn apply"
                 :disabled="activeTab.pending.length === 0"
                 :title="t('db.applyEdits', { n: activeTab.pending.length })"
                 @click="applyEdits(activeTab)"
@@ -1184,7 +1198,7 @@ void load()
                 </svg>
               </button>
               <button
-                class="edit-btn discard"
+                class="cell-edit-btn discard"
                 :disabled="activeTab.pending.length === 0"
                 :title="t('db.discardEdits')"
                 @click="discardEdits(activeTab)"
@@ -1846,8 +1860,9 @@ void load()
   color: var(--accent);
 }
 .filter-input {
-  flex: 1;
-  min-width: 160px;
+  flex: 0 1 420px;
+  min-width: 140px;
+  max-width: 520px;
 }
 .page-num {
   font-size: 12px;
@@ -1863,6 +1878,10 @@ void load()
   padding: 8px 12px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.toolbar > * {
+  flex-shrink: 0;
 }
 .ctx {
   font-size: 12px;
@@ -2027,41 +2046,52 @@ void load()
 .edit-actions {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px;
-  border-radius: 6px;
-  opacity: 0.45;
-  transition: opacity 0.15s ease;
+  gap: 6px;
+  margin-left: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-subtle);
+  flex: 0 0 auto;
+  min-width: max-content;
 }
-.edit-actions.active {
-  opacity: 1;
-}
-.edit-btn {
+.cell-edit-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--border-subtle);
+  width: 30px;
+  height: 28px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: transparent;
+  background: var(--bg-elevated);
   cursor: pointer;
   color: var(--text-muted);
   transition: all 0.12s ease;
 }
-.edit-btn:disabled {
-  cursor: default;
-  opacity: 0.4;
-}
-.edit-btn.apply:not(:disabled) {
+.cell-edit-btn.apply {
   color: #34d399;
-  border-color: rgba(52, 211, 153, 0.4);
-  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.35);
 }
-.edit-btn.discard:not(:disabled) {
-  color: var(--danger);
-  border-color: rgba(248, 113, 113, 0.4);
-  background: rgba(248, 113, 113, 0.1);
+.cell-edit-btn.discard {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.35);
+}
+.cell-edit-btn.apply:not(:disabled):hover {
+  background: rgba(52, 211, 153, 0.18);
+  border-color: rgba(52, 211, 153, 0.7);
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.15);
+}
+.cell-edit-btn.discard:not(:disabled):hover {
+  background: rgba(248, 113, 113, 0.16);
+  border-color: rgba(248, 113, 113, 0.7);
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.12);
+}
+.cell-edit-btn:disabled {
+  cursor: default;
+  opacity: 0.3;
+  background: transparent;
+}
+.edit-actions.active .cell-edit-btn {
+  box-shadow: 0 0 0 1px currentColor inset;
 }
 .pending-count {
   font-size: 10px;

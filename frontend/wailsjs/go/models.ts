@@ -314,6 +314,24 @@ export namespace db {
 	        this.truncated = source["truncated"];
 	    }
 	}
+	export class TableInfo {
+	    name: string;
+	    isView: boolean;
+	    rows: number;
+	    comment: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TableInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.isView = source["isView"];
+	        this.rows = source["rows"];
+	        this.comment = source["comment"];
+	    }
+	}
 	export class TableMeta {
 	    name: string;
 	    engine: string;
@@ -340,24 +358,6 @@ export namespace db {
 	        this.dataLength = source["dataLength"];
 	        this.indexLength = source["indexLength"];
 	        this.autoIncrement = source["autoIncrement"];
-	    }
-	}
-	export class TableInfo {
-	    name: string;
-	    isView: boolean;
-	    rows: number;
-	    comment: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new TableInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.isView = source["isView"];
-	        this.rows = source["rows"];
-	        this.comment = source["comment"];
 	    }
 	}
 	export class ZMember {

@@ -26,10 +26,6 @@ export function DBListIndexes(arg1, arg2, arg3) {
   return window['go']['app']['Service']['DBListIndexes'](arg1, arg2, arg3);
 }
 
-export function DBTableMeta(arg1, arg2, arg3) {
-  return window['go']['app']['Service']['DBTableMeta'](arg1, arg2, arg3);
-}
-
 export function DBListTables(arg1, arg2) {
   return window['go']['app']['Service']['DBListTables'](arg1, arg2);
 }
@@ -40,6 +36,10 @@ export function DBQuery(arg1, arg2, arg3) {
 
 export function DBShowCreateTable(arg1, arg2, arg3) {
   return window['go']['app']['Service']['DBShowCreateTable'](arg1, arg2, arg3);
+}
+
+export function DBTableMeta(arg1, arg2, arg3) {
+  return window['go']['app']['Service']['DBTableMeta'](arg1, arg2, arg3);
 }
 
 export function DeleteDBConn(arg1) {

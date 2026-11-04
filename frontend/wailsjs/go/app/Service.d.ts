@@ -20,11 +20,11 @@ export function DBListIndexes(arg1:string,arg2:string,arg3:string):Promise<Array
 
 export function DBListTables(arg1:string,arg2:string):Promise<Array<db.TableInfo>>;
 
-export function DBTableMeta(arg1:string,arg2:string,arg3:string):Promise<db.TableMeta>;
-
 export function DBQuery(arg1:string,arg2:string,arg3:number):Promise<db.Result>;
 
 export function DBShowCreateTable(arg1:string,arg2:string,arg3:string):Promise<string>;
+
+export function DBTableMeta(arg1:string,arg2:string,arg3:string):Promise<db.TableMeta>;
 
 export function DeleteDBConn(arg1:string):Promise<void>;
 
