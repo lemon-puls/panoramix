@@ -322,6 +322,7 @@ export default {
       question: '问题',
       sql: 'SQL',
       error: '错误',
+      schema: '表结构',
     },
     warning: {
       view_excluded: '视图已排除：{detail}',

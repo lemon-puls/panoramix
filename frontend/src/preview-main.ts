@@ -8,6 +8,7 @@ import { zhCN, dateZhCN } from 'naive-ui'
 type Handler = (...args: any[]) => void
 const handlers = new Map<string, Handler[]>()
 let lastAIRequestId = 'preview-ai-req'
+let lastAICanceled = false
 
 // 必须在任何模块 import monitor.ts 之前挂载 mock
 ;(window as any).runtime = {
@@ -180,11 +181,7 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
     }
   },
   AIGenerate: async () => {
-    emit('ai:status', { requestId: lastAIRequestId, phase: 'request' })
-    emit('ai:delta', { requestId: lastAIRequestId, text: 'SELECT u.id, u.email\n' })
-    emit('ai:delta', { requestId: lastAIRequestId, text: "FROM users u\nWHERE u.last_login < NOW() - INTERVAL 7 DAY\nORDER BY u.id;" })
-    emit('ai:status', { requestId: lastAIRequestId, phase: 'done' })
-    return {
+    const result = {
       sql: 'SELECT u.id, u.email\nFROM users u\nWHERE u.last_login < NOW() - INTERVAL 7 DAY\nORDER BY u.id;',
       explanation: '按最近登录时间筛选 7 天内未登录的用户；结果行需人工复核后再执行。',
       warnings: [],
@@ -200,8 +197,30 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
       insertAllowed: true,
       insertBlockReason: '',
     }
+    // ai_slow=1：持续推送 delta，用于验证“停止后迟到的 delta 不再渲染”
+    if (new URLSearchParams(location.search).get('ai_slow') === '1') {
+      lastAICanceled = false
+      return await new Promise((resolve) => {
+        emit('ai:status', { requestId: lastAIRequestId, phase: 'request' })
+        emit('ai:delta', { requestId: lastAIRequestId, text: 'DELTA-1' })
+        setTimeout(() => emit('ai:delta', { requestId: lastAIRequestId, text: '-DELTA-2' }), 250)
+        setTimeout(() => emit('ai:delta', { requestId: lastAIRequestId, text: '-DELTA-3' }), 500)
+        setTimeout(() => {
+          if (!lastAICanceled) emit('ai:status', { requestId: lastAIRequestId, phase: 'done' })
+          resolve(result)
+        }, 900)
+      })
+    }
+    emit('ai:status', { requestId: lastAIRequestId, phase: 'request' })
+    emit('ai:delta', { requestId: lastAIRequestId, text: 'SELECT u.id, u.email\n' })
+    emit('ai:delta', { requestId: lastAIRequestId, text: "FROM users u\nWHERE u.last_login < NOW() - INTERVAL 7 DAY\nORDER BY u.id;" })
+    emit('ai:status', { requestId: lastAIRequestId, phase: 'done' })
+    return result
   },
-  AICancel: async () => undefined,
+  AICancel: async () => {
+    lastAICanceled = true
+    return undefined
+  },
   AISaveConfig: async () => undefined,
   AITestConnection: async () => undefined,
   AIDeleteKey: async () => undefined,

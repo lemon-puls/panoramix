@@ -323,6 +323,7 @@ export default {
       question: 'question',
       sql: 'SQL',
       error: 'error',
+      schema: 'schema',
     },
     warning: {
       view_excluded: 'View excluded: {detail}',

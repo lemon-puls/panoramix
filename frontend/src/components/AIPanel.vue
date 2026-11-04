@@ -393,6 +393,13 @@ async function stop() {
     cancelPending()
     return
   }
+  // 请求/排队/解析阶段：立即作废本次运行（runToken），
+  // 后续迟到的 ai:delta 与 AIGenerate 结果都不会再渲染。
+  runToken++
+  busy.value = false
+  streamingText.value = ''
+  phase.value = ''
+  stopTimer()
   try {
     await AICancel(requestId)
     message.info(t('ai.stopped'))
@@ -493,12 +500,13 @@ function onKeydown(ev: KeyboardEvent) {
 onMounted(() => {
   offStatus = EventsOn('ai:status', (...args: unknown[]) => {
     const d = args[0] as { requestId?: string; phase?: string } | undefined
-    if (!d || d.requestId !== requestId) return
+    // busy=false 表示已停止/已结束：迟到事件不再改变界面
+    if (!d || d.requestId !== requestId || !busy.value) return
     phase.value = d.phase ?? ''
   })
   offDelta = EventsOn('ai:delta', (...args: unknown[]) => {
     const d = args[0] as { requestId?: string; text?: string } | undefined
-    if (!d || d.requestId !== requestId) return
+    if (!d || d.requestId !== requestId || !busy.value) return
     streamingText.value += d.text ?? ''
   })
   void reloadConfig()
