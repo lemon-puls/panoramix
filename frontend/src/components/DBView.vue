@@ -144,11 +144,17 @@ async function toggleDb(db: string) {
 }
 
 // 单击表 → 打开结构标签（已存在则激活）
-// 表结构标签：全局唯一且固定（不可关闭），跟随当前选中的表
+// 单击表：创建「表」与「数据」两个固定标签，激活「表」，数据同步加载
 async function openTableStructure(db: string, table: models.db.TableInfo) {
-  const tab = ensureStructureTab(db, table.name)
-  activeTabId.value = tab.id
-  await loadTableStructure(tab)
+  const structTab = ensureStructureTab(db, table.name)
+  const dataTab = ensureDataTab(db, table.name)
+  activeTabId.value = structTab.id
+  await Promise.all([
+    loadTableStructure(structTab),
+    dataTab.result && dataTab.table === table.name
+      ? Promise.resolve()
+      : loadTableData(dataTab, true),
+  ])
 }
 
 function ensureStructureTab(db: string, tableName: string): WorkTab {
@@ -197,29 +203,40 @@ async function loadTableStructure(tab: WorkTab) {
   }
 }
 
-// 双击表 → 打开/更新固定的「数据」标签（默认 1000 条）
-async function openTableData(db: string, table: models.db.TableInfo) {
-  // 同时确保「表」标签存在（HeidiSQL 行为：打开表即有 表/数据 两个固定标签）
-  ensureStructureTab(db, table.name)
+// 「数据」标签：全局唯一且固定，跟随当前表
+function ensureDataTab(db: string, tableName: string): WorkTab {
   const id = activeId.value
   let tab = tabs.value.find((x) => x.kind === 'data' && x.connId === id)
   if (tab) {
+    const changed = tab.database !== db || tab.table !== tableName
     tab.database = db
-    tab.table = table.name
+    tab.table = tableName
     tab.title = t('db.tabData')
-    tab.filter = ''
-    tab.sortCol = ''
     tab.error = ''
-  } else {
-    tab = newTab('data', {
-      title: t('db.tabData'),
-      database: db,
-      table: table.name,
-      pinned: true,
-    })
-    tabs.value.push(tab)
-    sortTabs()
+    if (changed) {
+      // 切换了表：清空旧结果，等待重新加载
+      tab.filter = ''
+      tab.sortCol = ''
+      tab.page = 0
+      tab.result = null
+    }
+    return tab
   }
+  tab = newTab('data', {
+    title: t('db.tabData'),
+    database: db,
+    table: tableName,
+    pinned: true,
+  })
+  tabs.value.push(tab)
+  sortTabs()
+  return tab
+}
+
+// 双击表 → 激活固定的「数据」标签并加载
+async function openTableData(db: string, table: models.db.TableInfo) {
+  ensureStructureTab(db, table.name)
+  const tab = ensureDataTab(db, table.name)
   activeTabId.value = tab.id
   await loadTableData(tab, true)
 }
