@@ -10,6 +10,44 @@
 - 产品决策、里程碑与验收标准见 `ROADMAP.md`；架构与模块边界见 `ARCHITECTURE.md`。
   本文件只约束工程规范。
 
+
+## AI 团队协作（.claude/）
+
+| 角色 | 定义 | 职责 |
+| --- | --- | --- |
+| **director** 总监 | `.claude/agents/director.md` | 设计评审、架构决策、代码终审；不写业务代码 |
+| **designer** 产品设计 | `.claude/agents/designer.md` | 竞品调研、功能与交互设计、验收标准 |
+| **engineer** 全栈工程 | `.claude/agents/engineer.md` | Go 后端 + Vue 前端实现、自测、原子提交 |
+| **qa** 质量 | `.claude/agents/qa.md` | 对照验收标准验证、回归、缺陷复现 |
+
+技能包（边干边写）：
+- `.claude/skills/panoramix-design/` —— 竞品洞察、设计系统、已否决方案
+- `.claude/skills/panoramix-engineering/` —— 技术栈、架构约束、踩坑记录
+- `.claude/skills/panoramix-qa/` —— 验收方法、回归路径、易漏边界
+
+### 每轮迭代流程
+
+```
+designer 设计提案（docs/design/NNN-*.md）
+   ↓
+director 评审（通过 / 有条件通过 / 打回）
+   ↓
+用户确认关键设计        ← 必须
+   ↓
+engineer 实现（后端 → 前端 → 自测 → 原子提交）
+   ↓
+qa 验收（门禁 + 边界 + 回归）
+   ↓
+director 终审
+   ↓
+进入下一轮（不停）
+```
+
+规则：
+1. 每轮只做一个可独立验证的增量
+2. 涉及用户数据（写库/DDL/删除）必须预览确认
+3. 团队成员发现设计有硬伤时停下反馈，不自行改需求
+
 ## 基础规范
 
 1. 代码中适当添加注释，注释使用中文

@@ -1,0 +1,95 @@
+---
+name: panoramix-engineering
+description: Panoramix 工程实现技能包。包含技术栈、架构约束与历史踩坑记录（Wails/Vue/Go 的具体坑与解法）。engineer 在实现前必读。
+---
+
+# Panoramix 工程技能包
+
+> 每次遇到非显而易见的坑就追加。格式：现象 → 根因 → 解法。
+
+## 一、技术栈与约束
+
+- Go 1.27.x + Wails v2.17 + Vue3/TS + Naive UI + Pinia + vue-i18n
+- SQLite（modernc，纯 Go）、keychain（zalando/go-keyring）
+- 测试：`go test ./internal/...`；前端类型 `npx vue-tsc --noEmit`
+- **依赖方向**：`app → ssh/sftp/store/monitor/db/xshell/fsx`；`internal/*` 禁止 import wails；`internal/*` 之间禁止横向 import（`ClientSource` 等接口注入）
+
+## 二、Wails 相关
+
+### 绑定文件重复声明
+- 现象：Rollup 报 `Identifier X has already been declared`
+- 根因：`wails dev` 自动重新生成 `frontend/wailsjs/go/app/*`，与手写绑定叠加
+- 解法：改绑定后跑 `python3 scripts/dedupe_bindings.py`
+
+### 模板无法解包 import 的 ref
+- 现象：`v-if="someView === 'db'"` 恒为 false，界面不切换
+- 根因：`<script setup>` 编译器不识别 import 进来的 ref 类型，模板生成裸变量比较（Ref 对象 ≠ 字符串）
+- 解法：本地 `computed` 包装后再在模板使用：`const isDB = computed(() => mainView.value === 'db')`
+
+### ref 数组中的对象被外部修改不响应
+- 现象：`tab.loading = false` 后界面仍显示"加载中"
+- 根因：`ref([])` 中 push 的是普通对象，外部持有原始引用，赋值绕过代理
+- 解法：创建时用 `reactive({...})`，或从数组按索引取代理对象
+
+### 文件拖放不触发
+- 现象：`OnFileDrop` 永不回调
+- 根因：Wails 需显式开启 `options.DragAndDrop{EnableFileDrop: true}`
+- 解法：在 `wails.Run` 的 options 里配置
+
+### 文件对话框签名
+- `runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{...})` —— **传值不是指针**
+- 字段名是 `DefaultFilename`（不是 DefaultFileName）
+
+### 原生元素与组件语法
+- `<textarea v-model="x">` 正确；`v-model:value` 只用于组件
+
+### PTY 尺寸参数顺序
+- `RequestPty(term, h, w)`、`WindowChange(h, w)` —— **行在前**
+- 传反会导致 top/vim 等全屏应用交错刷新
+
+## 三、CSS / 布局
+
+### 类名冲突
+- 现象：新按钮位置诡异、宽度被压成 10px
+- 根因：复用了别处已定义的类名（如 `.edit-btn` 在 Redis 值查看器里是 `position:absolute`）
+- 解法：新组件用带前缀的类名（`.cell-edit-btn`）；复用前先 Grep 全局
+
+### 表格内输入框撑宽列
+- 现象：编辑单元格时整表列宽错乱
+- 根因：`width:100%` 在 `table-layout:auto` 的 td 内形成循环计算
+- 解法：td `position: relative`，输入框 `position: absolute; inset: 1px`
+
+### flex 挤压
+- 现象：工具栏右侧按钮不可见
+- 根因：`flex-shrink` 默认为 1，左侧 `flex:1` 元素抢占空间
+- 解法：关键按钮组 `flex: 0 0 auto; min-width: max-content`；伸展元素设 `max-width`
+
+## 四、跨平台
+
+### WSL 下 Vite 收不到文件变更
+- 解法：`vite.config.ts` 开启 `server.watch.usePolling: true`
+
+### Windows/WSL 共用 node_modules
+- 现象：`npm install` 报 `ENOENT mkdir @esbuild/linux-x64`；一边构建另一边坏
+- 解法：哪个平台构建前端，就在哪个平台 `npm install`；Go 侧不受影响
+
+## 五、后端要点
+
+### SQLite 并发
+- `db.SetMaxOpenConns(1)` + WAL + busy_timeout，避免 modernc 驱动的锁问题
+
+### 迁移必须幂等
+- 用 `PRAGMA table_info` 探测列是否存在后再 `ALTER TABLE ADD COLUMN`
+
+### 凭据
+- 只进 keychain；`HostInput.String()/GoString()` 必须脱敏；有专门测试守卫
+
+### 传输队列调度
+- `pump()` 选中任务必须在同一把锁内同步置为 running，否则会被重复调度（曾导致单任务双 worker）
+
+### 断点续传
+- 进度计数必须基于断点基数（`h.Transferred`），不是本次增量
+- 取消/失败要**保留**半成品（否则无法续传）
+
+### 外部命令与 PTY
+- 构造测试服务端时要**忠实应用客户端声明的尺寸**，否则会掩盖客户端 bug
