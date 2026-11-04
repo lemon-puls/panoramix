@@ -72,6 +72,8 @@ let timer: number | undefined
 let offStatus: (() => void) | undefined
 let offDelta: (() => void) | undefined
 let autoConfigured = false
+// 取消 prepare/请求后递增；旧异步结果回来时据此丢弃，避免“停止后又发送”
+let runToken = 0
 
 const PREVIEW_SEEN_KEY = 'panoramix.ai.previewSeen'
 
@@ -145,6 +147,20 @@ const elapsedText = computed(() => t('ai.elapsed', { n: (elapsedMs.value / 1000)
 const streamingCursor = computed(() => (busy.value && phase.value === 'request' ? '▍' : ''))
 
 const activeWarnings = computed(() => result.value?.warnings ?? [])
+
+// 疑似敏感内容：只展示“字段 + 类型”，不展示命中值
+const sensitiveText = computed(() => {
+  const hints = prepared.value?.sensitiveHints ?? []
+  return hints
+    .map((hint) => {
+      const kindKey = `ai.sensitiveKind.${hint.kind}`
+      const kind = t(kindKey)
+      const fieldKey = `ai.sensitiveField.${hint.field}`
+      const field = t(fieldKey)
+      return `${field === fieldKey ? hint.field : field}: ${kind === kindKey ? hint.kind : kind}`
+    })
+    .join(', ')
+})
 
 async function reloadConfig() {
   try {
@@ -286,6 +302,7 @@ async function run() {
   }
   resetOutput()
   requestId = newRequestID()
+  const token = ++runToken
   busy.value = true
   phase.value = 'context'
   startTimer()
@@ -302,6 +319,7 @@ async function run() {
       locale: props.locale,
     })
     const p = await AIPrepare(req)
+    if (token !== runToken) return // 已被停止/取消
     prepared.value = p
     // 用户没有手选表时，把后端自动匹配的表回显出来，避免“暗中发送”错觉
     if (selectedTables.value.length === 0) {
@@ -329,6 +347,7 @@ async function run() {
 async function send(consent: boolean) {
   const p = prepared.value
   if (!p) return
+  const token = runToken
   pendingSend.value = false
   consentOpen.value = false
   busy.value = true
@@ -338,18 +357,23 @@ async function send(consent: boolean) {
   errorDetail.value = ''
   try {
     const res = await AIGenerate(p.prepareId, consent)
+    if (token !== runToken) return // 已停止
     result.value = res
     phase.value = 'done'
     markPreviewSeen(p.endpoint)
   } catch (e) {
+    if (token !== runToken) return
     handleError(e)
   } finally {
-    busy.value = false
-    stopTimer()
+    if (token === runToken) {
+      busy.value = false
+      stopTimer()
+    }
   }
 }
 
 function cancelPending() {
+  runToken++
   pendingSend.value = false
   consentOpen.value = false
   prepared.value = null
@@ -359,7 +383,16 @@ function cancelPending() {
 }
 
 async function stop() {
-  if (!requestId) return
+  // 等待确认/收集 schema 阶段没有可取消的模型请求：直接清理本地状态
+  if (pendingSend.value || consentOpen.value || phase.value === 'context' || phase.value === 'preview') {
+    cancelPending()
+    message.info(t('ai.stopped'))
+    return
+  }
+  if (!requestId) {
+    cancelPending()
+    return
+  }
   try {
     await AICancel(requestId)
     message.info(t('ai.stopped'))
@@ -620,6 +653,9 @@ function scopeClass(): string {
             {{ tbl.name }}<span v-if="tbl.chars"> · {{ tbl.chars }}</span>
           </span>
         </div>
+        <div v-if="prepared.sensitiveHints?.length" class="ai-sensitive">
+          {{ t('ai.sensitiveWarn', { items: sensitiveText }) }}
+        </div>
         <div v-for="(w, i) in prepared.warnings" :key="'pw-' + i" class="ai-warning">{{ warningText(w) }}</div>
         <pre v-if="showPayload" class="ai-payload">{{ prepared.payload }}</pre>
       </div>
@@ -677,6 +713,9 @@ function scopeClass(): string {
       <div class="ai-preview-meta ai-consent-meta">
         <span class="mono">{{ t('ai.payloadHash') }} {{ prepared?.payloadHash }}</span>
         <span>{{ t('ai.payloadChars', { n: prepared?.promptChars ?? 0 }) }}</span>
+      </div>
+      <div v-if="prepared?.sensitiveHints?.length" class="ai-sensitive">
+        {{ t('ai.sensitiveWarn', { items: sensitiveText }) }}
       </div>
       <pre v-if="showPayload" class="ai-payload">{{ prepared?.payload }}</pre>
       <button class="ai-link" @click="showPayload = !showPayload">
@@ -966,6 +1005,16 @@ function scopeClass(): string {
 .ai-warning {
   font-size: 10px;
   color: var(--warning);
+  line-height: 1.5;
+}
+/* 疑似敏感内容提示条：只提示，不自动删改 */
+.ai-sensitive {
+  padding: 6px 8px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  color: var(--warning);
+  background: var(--bg-elevated);
+  font-size: 10px;
   line-height: 1.5;
 }
 .ai-stream,

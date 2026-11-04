@@ -1993,6 +1993,7 @@ void load()
 .sql-editor {
   width: 100%;
   height: 130px;
+  box-sizing: border-box;
   resize: vertical;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border);

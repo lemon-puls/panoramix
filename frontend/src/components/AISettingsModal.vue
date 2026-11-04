@@ -267,10 +267,10 @@ function warningText(w: models.ai.Warning): string {
         <span class="ai-settings-scope" :class="`scope-${scope}`">{{ scopeLabel(scope) }}</span>
         <span class="mono">{{ endpoint }}</span>
         <span class="ai-settings-hint">
-          {{ scope === 'cloud' && cloudConsent ? t('ai.consentGranted') : '' }}
-          {{ scope === 'cloud' && !cloudConsent ? t('ai.consentNone') : '' }}
+          {{ scope !== 'local' && cloudConsent ? t('ai.consentGranted') : '' }}
+          {{ scope !== 'local' && !cloudConsent ? t('ai.consentNone') : '' }}
         </span>
-        <n-button v-if="scope === 'cloud' && cloudConsent" size="tiny" quaternary @click="clearConsents">
+        <n-button v-if="scope !== 'local' && cloudConsent" size="tiny" quaternary @click="clearConsents">
           {{ t('ai.clearConsents') }}
         </n-button>
       </div>

@@ -100,6 +100,20 @@ export namespace ai {
 		    return a;
 		}
 	}
+	export class SensitiveHint {
+	    field: string;
+	    kind: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SensitiveHint(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.field = source["field"];
+	        this.kind = source["kind"];
+	    }
+	}
 	export class TablePreview {
 	    name: string;
 	    chars: number;
@@ -127,6 +141,7 @@ export namespace ai {
 	    schemaChars: number;
 	    tables: TablePreview[];
 	    warnings: Warning[];
+	    sensitiveHints: SensitiveHint[];
 	    endpoint: string;
 	    endpointHash: string;
 	    scope: string;
@@ -151,6 +166,7 @@ export namespace ai {
 	        this.schemaChars = source["schemaChars"];
 	        this.tables = this.convertValues(source["tables"], TablePreview);
 	        this.warnings = this.convertValues(source["warnings"], Warning);
+	        this.sensitiveHints = this.convertValues(source["sensitiveHints"], SensitiveHint);
 	        this.endpoint = source["endpoint"];
 	        this.endpointHash = source["endpointHash"];
 	        this.scope = source["scope"];

@@ -109,10 +109,16 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
       }
     }
     const cloud = params.get('ai_cloud') === '1'
+    const lan = params.get('ai_lan') === '1'
+    const endpoint = cloud
+      ? 'https://api.example.com/v1'
+      : lan
+        ? 'http://192.168.1.10:11434/v1'
+        : 'http://127.0.0.1:11434/v1'
     return {
       enabled: true,
       provider: cloud ? 'openai-compatible' : 'ollama',
-      baseUrl: cloud ? 'https://api.example.com/v1' : 'http://127.0.0.1:11434/v1',
+      baseUrl: endpoint,
       model: 'qwen2.5-coder:7b',
       temperature: 0.1,
       timeoutSec: 120,
@@ -120,15 +126,22 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
       allowInsecureTls: false,
       concurrency: 1,
       hasKey: cloud,
-      endpoint: cloud ? 'https://api.example.com/v1' : 'http://127.0.0.1:11434/v1',
-      endpointHash: cloud ? 'ff00ff00ff00ff00' : 'ab12cd34ef56ab78',
-      scope: cloud ? 'cloud' : 'local',
-      cloudConsent: false,
+      endpoint,
+      endpointHash: cloud ? 'ff00ff00ff00ff00' : lan ? '1122334455667788' : 'ab12cd34ef56ab78',
+      scope: cloud ? 'cloud' : lan ? 'lan' : 'local',
+      cloudConsent: params.get('ai_consent') === '1',
       warnings: [],
     }
   },
   AIPrepare: async (req: any) => {
-    const cloud = new URLSearchParams(location.search).get('ai_cloud') === '1'
+    const params = new URLSearchParams(location.search)
+    const cloud = params.get('ai_cloud') === '1'
+    const lan = params.get('ai_lan') === '1'
+    const endpoint = cloud
+      ? 'https://api.example.com/v1'
+      : lan
+        ? 'http://192.168.1.10:11434/v1'
+        : 'http://127.0.0.1:11434/v1'
     lastAIRequestId = req?.requestId ?? 'preview-ai-req'
     return {
       prepareId: 'prep-preview',
@@ -148,15 +161,22 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
         { name: 'v_user_summary', chars: 0, excluded: true, reason: 'view' },
       ],
       warnings: [{ code: 'foreign_key_unselected', detail: 'payments' }],
-      endpoint: cloud ? 'https://api.example.com/v1' : 'http://127.0.0.1:11434/v1',
-      endpointHash: cloud ? 'ff00ff00ff00ff00' : 'ab12cd34ef56ab78',
-      scope: cloud ? 'cloud' : 'local',
+      endpoint,
+      endpointHash: cloud ? 'ff00ff00ff00ff00' : lan ? '1122334455667788' : 'ab12cd34ef56ab78',
+      scope: cloud ? 'cloud' : lan ? 'lan' : 'local',
       provider: cloud ? 'openai-compatible' : 'ollama',
       model: 'qwen2.5-coder:7b',
-      needsConsent: cloud,
+      needsConsent: (cloud || lan) && params.get('ai_consent') !== '1',
       expiresInSec: 300,
       allowWrite: false,
       mode: req?.mode ?? 'generate',
+      sensitiveHints:
+        params.get('ai_sensitive') === '1'
+          ? [
+              { field: 'question', kind: 'password_assignment' },
+              { field: 'question', kind: 'email_address' },
+            ]
+          : [],
     }
   },
   AIGenerate: async () => {
