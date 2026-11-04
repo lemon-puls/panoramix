@@ -269,6 +269,10 @@ interface WorkTab {
   ddl: string
   showDDL: boolean
   pinned: boolean
+  // 数据编辑
+  pkColumns: string[]
+  pending: { row: number; col: number; value: string }[]
+  editing: { row: number; col: number } | null
   gridSortCol: number
   gridSortDir: 1 | -1
   selectedRow: number
@@ -307,6 +311,9 @@ function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
     ddl: '',
     showDDL: false,
     pinned: false,
+    pkColumns: [],
+    pending: [],
+    editing: null,
     gridSortCol: -1,
     gridSortDir: 1,
     selectedRow: -1,
@@ -361,14 +368,128 @@ async function loadTableData(tab: WorkTab, resetPage = false) {
   if (resetPage) tab.page = 0
   tab.loading = true
   tab.error = ''
+  tab.pending = []
+  tab.editing = null
   try {
-    tab.result = await DBQuery(tab.connId, buildTableSQL(tab), tab.pageSize)
+    const [res, cols] = await Promise.all([
+      DBQuery(tab.connId, buildTableSQL(tab), tab.pageSize),
+      tab.pkColumns.length === 0
+        ? DBDescribeTable(tab.connId, tab.database, tab.table).catch(() => [] as models.db.ColumnInfo[])
+        : Promise.resolve([] as models.db.ColumnInfo[]),
+    ])
+    tab.result = res
+    if (cols.length > 0) {
+      tab.pkColumns = cols.filter((c) => c.key === 'PRI').map((c) => c.field)
+    }
     tab.gridSortCol = -1
     tab.selectedRow = -1
     tab.selectedCol = -1
   } catch (e) {
     tab.error = String(e)
     tab.result = null
+  } finally {
+    tab.loading = false
+  }
+}
+
+// ---------- 数据单元格编辑 ----------
+
+// 编辑态绑定的输入值
+const cellInput = ref('')
+
+function startEdit(tab: WorkTab, row: number, col: number) {
+  if (!tab.pkColumns.length) {
+    message.warning(t('db.noPrimaryKey'))
+    return
+  }
+  const idx = tab.pending.findIndex((p) => p.row === row && p.col === col)
+  const current = idx >= 0 ? tab.pending[idx].value : (tab.result?.rows?.[row]?.[col] ?? '')
+  cellInput.value = current
+  tab.editing = { row, col }
+}
+
+function commitEdit(tab: WorkTab) {
+  if (!tab.editing) return
+  const { row, col } = tab.editing
+  const original = tab.result?.rows?.[row]?.[col] ?? null
+  const value = cellInput.value
+  tab.editing = null
+  // 与原始值相同则移除待提交项
+  const unchanged =
+    (original === null && value === 'NULL') || (original !== null && original === value)
+  const idx = tab.pending.findIndex((p) => p.row === row && p.col === col)
+  if (unchanged) {
+    if (idx >= 0) tab.pending.splice(idx, 1)
+    return
+  }
+  if (idx >= 0) tab.pending[idx].value = value
+  else tab.pending.push({ row, col, value })
+}
+
+function cancelEdit(tab: WorkTab) {
+  tab.editing = null
+}
+
+function discardEdits(tab: WorkTab) {
+  tab.pending = []
+  tab.editing = null
+}
+
+function pendingValue(tab: WorkTab, row: number, col: number): string | null {
+  const p = tab.pending.find((x) => x.row === row && x.col === col)
+  return p ? p.value : null
+}
+
+// 生成 UPDATE 并执行（按主键定位行；NULL 用字面量 NULL）
+function sqlLiteral(v: string): string {
+  return v === 'NULL' ? 'NULL' : `'${v.replace(/'/g, "''")}'`
+}
+
+async function applyEdits(tab: WorkTab) {
+  if (!tab.result || tab.pending.length === 0) return
+  const columns = tab.result.columns
+  // 使用与界面一致的视图（排序后），确保行索引对应
+  const rows = sortedRows(tab)
+  const idxOf = (name: string) => columns.findIndex((c) => c === name)
+  const pkIdx = tab.pkColumns.map(idxOf)
+  if (pkIdx.some((i) => i < 0)) {
+    message.error(t('db.noPrimaryKey'))
+    return
+  }
+
+  // 按行分组生成 UPDATE
+  const byRow = new Map<number, { row: number; col: number; value: string }[]>()
+  for (const p of tab.pending) {
+    const list = byRow.get(p.row) ?? []
+    list.push(p)
+    byRow.set(p.row, list)
+  }
+  const table = `${quoteIdent(tab.database)}.${quoteIdent(tab.table)}`
+  const statements: string[] = []
+  for (const [rowIdx, edits] of byRow) {
+    const rowData = rows[rowIdx]
+    if (!rowData) continue
+    const setClause = edits
+      .map((e) => `${quoteIdent(columns[e.col])} = ${sqlLiteral(e.value)}`)
+      .join(', ')
+    const whereClause = tab.pkColumns
+      .map((name) => {
+        const v = rowData[idxOf(name)]
+        return `${quoteIdent(name)} = ${v === null ? 'NULL' : `'${v.replace(/'/g, "''")}'`}`
+      })
+      .join(' AND ')
+    statements.push(`UPDATE ${table} SET ${setClause} WHERE ${whereClause} LIMIT 1;`)
+  }
+
+  tab.loading = true
+  try {
+    for (const sql of statements) {
+      await DBQuery(tab.connId, sql, 1)
+    }
+    message.success(t('db.editsApplied', { n: statements.length }))
+    await loadTableData(tab)
+  } catch (e) {
+    message.error(String(e))
   } finally {
     tab.loading = false
   }
@@ -1051,6 +1172,29 @@ void load()
             <n-button size="small" :disabled="!(activeTab.result?.columns?.length)" @click="exportCSV(activeTab)">
               CSV
             </n-button>
+            <span class="edit-actions" :class="{ active: activeTab.pending.length > 0 }">
+              <button
+                class="edit-btn apply"
+                :disabled="activeTab.pending.length === 0"
+                :title="t('db.applyEdits', { n: activeTab.pending.length })"
+                @click="applyEdits(activeTab)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              </button>
+              <button
+                class="edit-btn discard"
+                :disabled="activeTab.pending.length === 0"
+                :title="t('db.discardEdits')"
+                @click="discardEdits(activeTab)"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+              <span v-if="activeTab.pending.length" class="pending-count">{{ activeTab.pending.length }}</span>
+            </span>
           </div>
 
           <div class="result">
@@ -1060,7 +1204,7 @@ void load()
                 {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
                 <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
                 <span class="spacer" />
-                <span class="hint">{{ t('db.clickSort') }}</span>
+                <span class="hint">{{ t('db.clickSort') }} · {{ t('db.clickEdit') }}</span>
               </div>
               <div class="grid-wrap">
                 <table class="grid">
@@ -1087,11 +1231,24 @@ void load()
                         :key="ci"
                         :class="{
                           null: cell === null,
+                          edited: pendingValue(activeTab, ri, ci) !== null,
                           selected: activeTab.selectedRow === ri && activeTab.selectedCol === ci,
                         }"
-                        @click="copyCell(activeTab, ri, ci)"
+                        @click="activeTab.editing?.row === ri && activeTab.editing?.col === ci ? undefined : startEdit(activeTab, ri, ci)"
                       >
-                        {{ cell === null ? 'NULL' : cell }}
+                        <input
+                          v-if="activeTab.editing?.row === ri && activeTab.editing?.col === ci"
+                          v-model="cellInput"
+                          class="cell-input"
+                          autofocus
+                          @keyup.enter="commitEdit(activeTab)"
+                          @keyup.esc="cancelEdit(activeTab)"
+                          @blur="commitEdit(activeTab)"
+                          @click.stop
+                        />
+                        <template v-else>
+                          {{ pendingValue(activeTab, ri, ci) ?? (cell === null ? 'NULL' : cell) }}
+                        </template>
                       </td>
                     </tr>
                   </tbody>
@@ -1866,6 +2023,68 @@ void load()
 }
 .row-op.danger:hover {
   color: var(--danger);
+}
+.edit-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 6px;
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+}
+.edit-actions.active {
+  opacity: 1;
+}
+.edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.12s ease;
+}
+.edit-btn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.edit-btn.apply:not(:disabled) {
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.4);
+  background: rgba(52, 211, 153, 0.12);
+}
+.edit-btn.discard:not(:disabled) {
+  color: var(--danger);
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(248, 113, 113, 0.1);
+}
+.pending-count {
+  font-size: 10px;
+  color: var(--warning);
+  min-width: 12px;
+  text-align: center;
+}
+.grid td.edited {
+  background: rgba(251, 191, 36, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(251, 191, 36, 0.45);
+  color: var(--text-primary);
+}
+.cell-input {
+  width: 100%;
+  min-width: 80px;
+  background: var(--bg-app);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 1px 4px;
+  outline: none;
 }
 .pill-accent {
   background: var(--accent-soft);
