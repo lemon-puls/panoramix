@@ -122,7 +122,7 @@ const tableOptions = computed(() =>
 )
 
 const canRun = computed(() => {
-  if (!configReady.value || busy.value) return false
+  if (!configReady.value || busy.value || !database.value) return false
   if (mode.value === 'generate') return question.value.trim().length > 0
   return sqlInput.value.trim().length > 0
 })
@@ -174,8 +174,9 @@ async function loadDatabases() {
       return
     }
     if (!database.value || !databases.value.includes(database.value)) {
+      // 连接没有默认库时必须让用户显式选择（评审要求），不要默认落到 information_schema
       const preferred = props.defaultDatabase
-      database.value = preferred && databases.value.includes(preferred) ? preferred : databases.value[0]
+      database.value = preferred && databases.value.includes(preferred) ? preferred : ''
     }
     await loadTables()
   } catch (e) {
@@ -375,6 +376,13 @@ function handleError(e: unknown) {
   phase.value = 'error'
   busy.value = false
   stopTimer()
+  // 用户主动“停止”不是错误：stop() 已给出提示，不再弹红色错误
+  if (errorCode.value === 'canceled') {
+    phase.value = ''
+    errorCode.value = ''
+    errorDetail.value = ''
+    return
+  }
   message.error(errorText(e))
 }
 
