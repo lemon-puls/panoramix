@@ -2,7 +2,7 @@
 import { computed, h, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
-import { NButton, NInput, NInputNumber, NModal, NPopover, NSelect } from 'naive-ui'
+import { NButton, NDropdown, NInput, NInputNumber, NModal, NPopover, NSelect } from 'naive-ui'
 import {
   DBDescribeTable,
   DBListDatabases,
@@ -41,6 +41,8 @@ import {
   cloneConditions,
   conditionError,
   defaultOperatorForType,
+  familyOfType,
+  sameCondition,
   type FilterCondition,
   type FilterOp,
 } from './gridFilters'
@@ -1046,6 +1048,292 @@ function onDataKeydown(e: KeyboardEvent) {
     })
   }
 }
+
+// ---------- 单元格 / 列头右键快捷筛选 ----------
+
+type ContextMenuKind = 'cell' | 'header'
+
+const cellMenu = reactive({
+  show: false,
+  x: 0,
+  y: 0,
+  tabId: '',
+  kind: 'cell' as ContextMenuKind,
+  row: -1,
+  col: -1,
+  column: '',
+  databaseValue: null as string | null,
+  hasPending: false,
+})
+
+const cellMenuTab = computed(() => tabs.value.find((t) => t.id === cellMenu.tabId) ?? null)
+
+const cellMenuColumn = computed(() => {
+  const tab = cellMenuTab.value
+  if (!tab) return null
+  return tab.columns.find((c) => c.field === cellMenu.column) ?? null
+})
+
+function truncateValue(v: string): string {
+  const runes = [...v]
+  return runes.length > 24 ? runes.slice(0, 24).join('') + '…' : v
+}
+
+function copyText(text: string, okMessage?: string) {
+  if (!text) return
+  navigator.clipboard?.writeText(text).then(
+    () => message.success(okMessage ?? t('db.cell.copied')),
+    () => {
+      /* 忽略 */
+    },
+  )
+}
+
+function openCellMenu(e: MouseEvent, tab: WorkTab, row: number, col: number) {
+  e.preventDefault()
+  const rows = sortedRows(tab)
+  cellMenu.show = true
+  cellMenu.x = e.clientX
+  cellMenu.y = e.clientY
+  cellMenu.tabId = tab.id
+  cellMenu.kind = 'cell'
+  cellMenu.row = row
+  cellMenu.col = col
+  cellMenu.column = tab.result?.columns?.[col] ?? ''
+  cellMenu.databaseValue = rows[row]?.[col] ?? null
+  cellMenu.hasPending = tab.pending.some((p) => p.row === row && p.col === col)
+}
+
+function openHeaderMenu(e: MouseEvent, tab: WorkTab, name: string) {
+  e.preventDefault()
+  cellMenu.show = true
+  cellMenu.x = e.clientX
+  cellMenu.y = e.clientY
+  cellMenu.tabId = tab.id
+  cellMenu.kind = 'header'
+  cellMenu.row = -1
+  cellMenu.col = -1
+  cellMenu.column = name
+  cellMenu.databaseValue = null
+  cellMenu.hasPending = false
+}
+
+const cellMenuOptions = computed(() => {
+  const tab = cellMenuTab.value
+  if (!tab) return []
+  const col = cellMenuColumn.value
+  const rawMode = tab.filterMode === 'raw'
+  const options: Record<string, unknown>[] = []
+
+  if (cellMenu.kind === 'header') {
+    if (rawMode) {
+      options.push({ label: t('db.cell.rawDisabledShort'), key: 'hint-raw', disabled: true })
+    }
+    options.push({
+      label: t('db.cell.filterColumn'),
+      key: 'filter-column',
+      disabled: rawMode,
+    })
+    options.push({ label: t('db.cell.sortAsc'), key: 'sort-asc' })
+    options.push({ label: t('db.cell.sortDesc'), key: 'sort-desc' })
+    options.push({ type: 'divider', key: 'divider-1' })
+    options.push({
+      label: t('db.cell.hideColumn'),
+      key: 'hide-column',
+      disabled: visibleColumnsOf(tab).length <= 1,
+    })
+    options.push({ label: t('db.cell.copyColumn'), key: 'copy-column' })
+    return options
+  }
+
+  // 单元格菜单：高级模式下只保留编辑/复制
+  if (rawMode) {
+    options.push({ label: t('db.cell.rawDisabled'), key: 'hint-raw', disabled: true })
+    const v = cellMenu.databaseValue === null ? 'NULL' : truncateValue(cellMenu.databaseValue)
+    options.push({ label: t('db.cell.filterEq', { value: v }), key: 'filter-eq', disabled: true })
+    options.push({ label: t('db.cell.filterContains'), key: 'filter-contains', disabled: true })
+    options.push({ label: t('db.cell.filterNe', { value: v }), key: 'filter-ne', disabled: true })
+  } else if (cellMenu.databaseValue === null) {
+    options.push({ label: t('db.cell.filterNull'), key: 'filter-null' })
+    options.push({ label: t('db.cell.filterNotNull'), key: 'filter-not-null' })
+  } else {
+    const value = cellMenu.databaseValue
+    const shown = truncateValue(value)
+    const fam = familyOfType(col?.type ?? '')
+    const tooLong = [...value].length > 4096
+    const db = cellMenu.hasPending
+    if (fam === 'numeric' || fam === 'date' || fam === 'enum' || fam === 'text') {
+      options.push({
+        label: t(db ? 'db.cell.filterDbEq' : 'db.cell.filterEq', { value: shown }),
+        key: 'filter-eq',
+        disabled: tooLong,
+      })
+    }
+    if (fam === 'text' || fam === 'json') {
+      options.push({
+        label: t(db ? 'db.cell.filterDbContains' : 'db.cell.filterContains'),
+        key: 'filter-contains',
+        disabled: tooLong,
+      })
+    }
+    if (fam === 'numeric' || fam === 'date' || fam === 'enum' || fam === 'text') {
+      options.push({
+        label: t(db ? 'db.cell.filterDbNe' : 'db.cell.filterNe', { value: shown }),
+        key: 'filter-ne',
+        disabled: tooLong,
+      })
+    }
+    if (tooLong) {
+      options.push({ label: t('db.cell.valueTooLong'), key: 'hint-long', disabled: true })
+    }
+    // JSON/BLOB/未知类型只提供 NULL 语义的操作
+    if (fam === 'json' || fam === 'binary' || fam === 'other') {
+      options.push({ label: t('db.cell.filterNull'), key: 'filter-null' })
+      options.push({ label: t('db.cell.filterNotNull'), key: 'filter-not-null' })
+    }
+  }
+  if (cellMenu.hasPending) {
+    options.push({ label: t('db.cell.pendingHint'), key: 'hint-pending', disabled: true })
+  }
+  options.push({ type: 'divider', key: 'divider-2' })
+  options.push({ label: t('db.cell.edit'), key: 'edit' })
+  options.push({ label: t('db.cell.copyValue'), key: 'copy-value' })
+  return options
+})
+
+function focusDraftRow(index: number) {
+  nextTick(() => {
+    const row = document.querySelectorAll('.grid-filter-row')[index]
+    row?.scrollIntoView({ block: 'nearest' })
+    row?.querySelector<HTMLInputElement>('.grid-filter-value input')?.focus()
+  })
+}
+
+// 快捷筛选只追加到草稿，不自动应用
+function appendQuickCondition(tab: WorkTab, column: string, op: FilterOp, value: string) {
+  if (tab.filterMode === 'raw') return
+  const base = tab.filterPanelOpen
+    ? cloneConditions(tab.conditionsDraft)
+    : cloneConditions(tab.conditions)
+  const cond: FilterCondition = { column, op, value }
+  const existing = base.findIndex((c) => sameCondition(c, cond))
+  tab.filterMode = 'structured'
+  tab.columnsPanelOpen = false
+  if (existing >= 0) {
+    tab.conditionsDraft = base
+    tab.filterPanelOpen = true
+    focusDraftRow(existing)
+    return
+  }
+  if (base.length >= 5) {
+    tab.conditionsDraft = base
+    tab.filterPanelOpen = true
+    message.warning(t('db.cell.maxConditions'))
+    return
+  }
+  tab.conditionsDraft = [...base, cond]
+  tab.filterPanelOpen = true
+  focusDraftRow(base.length)
+}
+
+function addFilterForColumn(tab: WorkTab, column: string) {
+  if (tab.filterMode === 'raw') {
+    message.warning(t('db.cell.rawDisabledShort'))
+    return
+  }
+  const base = tab.filterPanelOpen
+    ? cloneConditions(tab.conditionsDraft)
+    : cloneConditions(tab.conditions)
+  if (base.length >= 5) {
+    tab.conditionsDraft = base
+    tab.filterPanelOpen = true
+    message.warning(t('db.cell.maxConditions'))
+    return
+  }
+  const col = tab.columns.find((c) => c.field === column)
+  tab.filterMode = 'structured'
+  tab.columnsPanelOpen = false
+  tab.conditionsDraft = [
+    ...base,
+    { column, op: defaultOperatorForType(col?.type ?? ''), value: '' },
+  ]
+  tab.filterPanelOpen = true
+  focusDraftRow(base.length)
+}
+
+async function setSort(tab: WorkTab, column: string, dir: 1 | -1) {
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, true, guard, () => {
+    tab.sortCol = column
+    tab.sortDir = dir
+  })
+}
+
+function hideColumn(tab: WorkTab, name: string) {
+  if (visibleColumnsOf(tab).length <= 1) {
+    message.warning(t('db.columns.keepOne', { name }))
+    return
+  }
+  // 活动编辑属于该列时先提交，再隐藏
+  if (tab.editing) {
+    const editingName = tab.result?.columns?.[tab.editing.col]
+    if (editingName === name) commitEdit(tab)
+  }
+  if (tab.hiddenColumns.includes(name)) return
+  tab.hiddenColumns = [...tab.hiddenColumns, name]
+  void saveGridPref(tab)
+}
+
+function onCellMenuSelect(key: string) {
+  cellMenu.show = false
+  const tab = cellMenuTab.value
+  if (!tab) return
+  const dbValue = cellMenu.databaseValue
+  switch (key) {
+    case 'filter-eq':
+      if (dbValue !== null) appendQuickCondition(tab, cellMenu.column, 'eq', dbValue)
+      break
+    case 'filter-contains':
+      if (dbValue !== null) appendQuickCondition(tab, cellMenu.column, 'contains', dbValue)
+      break
+    case 'filter-ne':
+      if (dbValue !== null) appendQuickCondition(tab, cellMenu.column, 'ne', dbValue)
+      break
+    case 'filter-null':
+      appendQuickCondition(tab, cellMenu.column, 'is_null', '')
+      break
+    case 'filter-not-null':
+      appendQuickCondition(tab, cellMenu.column, 'is_not_null', '')
+      break
+    case 'edit':
+      startEdit(tab, cellMenu.row, cellMenu.col)
+      break
+    case 'copy-value': {
+      // 复制用户看到的值（若该单元格有 pending，则复制 pending 值）
+      const p = tab.pending.find((x) => x.row === cellMenu.row && x.col === cellMenu.col)
+      copyText(p ? p.value : dbValue === null ? 'NULL' : dbValue)
+      break
+    }
+    case 'copy-column':
+      copyText(cellMenu.column, t('db.cell.copiedColumn'))
+      break
+    case 'sort-asc':
+      void setSort(tab, cellMenu.column, 1)
+      break
+    case 'sort-desc':
+      void setSort(tab, cellMenu.column, -1)
+      break
+    case 'hide-column':
+      hideColumn(tab, cellMenu.column)
+      break
+    case 'filter-column':
+      addFilterForColumn(tab, cellMenu.column)
+      break
+  }
+}
+
+
 
 // ---------- 数据单元格编辑 ----------
 
@@ -2255,6 +2543,7 @@ void load()
                         class="sortable"
                         :title="t('db.sortServerSide')"
                         @click="sortTableByColumn(activeTab, ref.name)"
+                        @contextmenu.prevent="openHeaderMenu($event, activeTab, ref.name)"
                       >
                         {{ ref.name }}
                         <span v-if="activeTab.sortCol === ref.name" class="sort">{{ activeTab.sortDir === 1 ? '▲' : '▼' }}</span>
@@ -2273,6 +2562,7 @@ void load()
                           selected: activeTab.selectedRow === ri && activeTab.selectedCol === ref.idx,
                         }"
                         @click="activeTab.editing?.row === ri && activeTab.editing?.col === ref.idx ? undefined : startEdit(activeTab, ri, ref.idx)"
+                        @contextmenu.prevent="openCellMenu($event, activeTab, ri, ref.idx)"
                       >
                         <input
                           v-if="activeTab.editing?.row === ri && activeTab.editing?.col === ref.idx"
@@ -2642,6 +2932,17 @@ void load()
       :table="activeTab?.table ?? ''"
       :tables="currentDbTables"
       @submit="submitIndex"
+    />
+
+    <n-dropdown
+      placement="bottom-start"
+      trigger="manual"
+      :show="cellMenu.show"
+      :x="cellMenu.x"
+      :y="cellMenu.y"
+      :options="cellMenuOptions"
+      @select="onCellMenuSelect"
+      @clickoutside="cellMenu.show = false"
     />
 
     <n-modal
