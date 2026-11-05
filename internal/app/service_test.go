@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lemon-puls/panoramix/internal/db"
 	"github.com/lemon-puls/panoramix/internal/store"
 )
 
@@ -176,5 +177,18 @@ func TestSnippetValidation(t *testing.T) {
 	}
 	if _, err := svc.SaveSnippet(store.Snippet{Name: "list", Content: " "}); err == nil {
 		t.Fatal("snippet with blank content should be rejected")
+	}
+}
+
+// TestDBUpdateRowsStableErrorCode 锁定绑定层的稳定错误码约定：
+// 前端按 "code: message" 解析，不能依赖英文消息文本。
+func TestDBUpdateRowsStableErrorCode(t *testing.T) {
+	svc, _ := newTestService(t) // dbmgr 为 nil
+	_, err := svc.DBUpdateRows("conn-1", "app", "users", nil)
+	if err == nil {
+		t.Fatal("expected error when db manager is not ready")
+	}
+	if !strings.HasPrefix(err.Error(), db.ErrCodeDBManagerNotReady+": ") {
+		t.Fatalf("error %q does not start with %q", err.Error(), db.ErrCodeDBManagerNotReady+": ")
 	}
 }
