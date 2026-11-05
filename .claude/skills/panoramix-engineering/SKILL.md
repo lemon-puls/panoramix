@@ -162,3 +162,21 @@ description: Panoramix 工程实现技能包。包含技术栈、架构约束与
 - 现象：textarea `width:100%` + 左右 padding 后比容器宽 20px
 - 解法：`box-sizing: border-box`；用 CDP 在 1600/960 视口断言
   `clientWidth === scrollWidth` 且 `documentElement` 无横向溢出
+
+## 七、前端验证 / 测试环境
+
+### headless Chrome 下 Naive UI 弹窗节点不会卸载
+- 现象：脚本点击“取消”后 `.n-dialog` 仍留在 DOM（computed `opacity: 0`），
+  等待节点消失会超时；后续操作容易点到过渡中的旧弹窗
+- 根因：headless 没有可见渲染帧，`fade-in-scale-up-transition-leave-*` 的
+  `transitionend` 不触发，Vue 不会卸载节点；真实浏览器正常
+- 解法：不要以“节点消失”作为关闭条件。用 `WeakSet` 标记已点击的弹窗，
+  每次只取新出现的 `.n-dialog`；判断逻辑正确性时看 pending/页码等业务状态
+
+### WSL 下补装前端平台二进制时目录冲突
+- 现象：`npm i --no-save @rollup/rollup-linux-x64-gnu@x` 报 `ENOENT mkdir`；
+  同一路径 `ls` 看不到、`mkdir` 却报 `File exists`，`rm -rf` 报 `Is a directory`
+- 根因：`/mnt/d`（Windows 盘）上 npm 失败留下的目录项在 DrvFs 中状态不一致
+- 解法：`npm pack` 下载后 tar 解包，放到包内私有
+  `node_modules/rollup/node_modules/@rollup/rollup-linux-x64-gnu`（Node 解析优先命中）；
+  esbuild 同理放 `node_modules/esbuild/node_modules/@esbuild/linux-x64`
