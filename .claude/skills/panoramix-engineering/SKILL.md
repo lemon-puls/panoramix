@@ -182,3 +182,10 @@ description: Panoramix 工程实现技能包。包含技术栈、架构约束与
   esbuild 同理放 `node_modules/esbuild/node_modules/@esbuild/linux-x64`。
   若随后 `npm i` 仍要重建顶层同名目录：先 `mkdir <临时名>` 再 `rename` 成目标名，
   可绕过 DrvFs 的幽灵目录项；顶层目录建好后再跑 `npm i`
+
+### headless Chrome 下 NSelect 菜单为空
+- 现象：CDP 合成点击打开 `n-select` 后，`.n-base-select-menu` 存在但
+  `opacity: 0` 且没有任何 `.n-base-select-option`；同一脚本换个时间又可能通过
+- 根因：headless 页面未获得焦点时，下拉菜单依赖的 rAF/焦点相关渲染被节流
+- 解法：连接 CDP 后先 `Page.bringToFront` +
+  `Emulation.setFocusEmulationEnabled({ enabled: true })`，再驱动选择器
