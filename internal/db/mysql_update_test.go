@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/lemon-puls/panoramix/internal/store"
 )
 
 // ---------- 参数化 UPDATE 的 SQL/参数断言 ----------
@@ -519,4 +521,19 @@ func TestUpdateRowsOnDBWritesCompositePKWithBothColumns(t *testing.T) {
 	if len(args) != 3 || args[0].Value != "x" || args[1].Value != "1" || args[2].Value != "t1" {
 		t.Fatalf("unexpected args: %#v", args)
 	}
+}
+
+// TestManagerUpdateRowsRejectsBeforeConnecting 验证公共入口在建立连接前就拒绝：
+// 超限/空库名不依赖数据库即可返回稳定错误码。
+func TestManagerUpdateRowsRejectsBeforeConnecting(t *testing.T) {
+	m := NewManager()
+	tooMany := make([]RowUpdate, maxRowUpdates+1)
+	_, err := m.UpdateRows(store.DBConn{}, "", "app", "users", tooMany)
+	assertErrorCode(t, err, errCodeTooManyUpdates)
+
+	_, err = m.UpdateRows(store.DBConn{}, "", "  ", "users", []RowUpdate{{
+		PK:  map[string]*string{"id": strPtr("1")},
+		Set: map[string]*string{"name": strPtr("x")},
+	}})
+	assertErrorCode(t, err, errCodeInvalidUpdate)
 }
