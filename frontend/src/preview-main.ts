@@ -68,6 +68,17 @@ function previewRowsFor(force: number): (string | null)[][] {
   return previewBaseRows
 }
 
+// 空状态调试：?empty=1 始终 0 行；?empty_page=1 第一页满页、后续页 0 行；
+// ?empty_after_filter=1 有筛选条件时返回 0 行（用于验证“筛选无命中”）。
+function previewResultRows(q: any): (string | null)[][] {
+  const params = new URLSearchParams(location.search)
+  if (params.get('empty') === '1') return []
+  if (params.get('empty_page') === '1' && (q?.page ?? 0) > 0) return []
+  const hasPredicate = (q?.conditions?.length ?? 0) > 0 || String(q?.rawWhere ?? '').trim() !== ''
+  if (params.get('empty_after_filter') === '1' && hasPredicate) return []
+  return previewRowsFor(Number(params.get('rows') ?? '0'))
+}
+
 function previewWhere(q: any): string {
   const parts: string[] = []
   for (const c of q?.conditions ?? []) {
@@ -170,11 +181,10 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
     const { sql } = previewTableSQL(q)
     w.__dbQueries = [...(w.__dbQueries ?? []), sql]
     if (w.__dbQueryFail) throw new Error('query timed out')
-    const forced = Number(new URLSearchParams(location.search).get('rows') ?? '0')
     return {
       result: {
         columns: previewColumns.map((c) => c.field),
-        rows: previewRowsFor(forced),
+        rows: previewResultRows(q),
         affected: 0,
         durationMs: 3,
         truncated: false,

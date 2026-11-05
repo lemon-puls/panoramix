@@ -2543,7 +2543,9 @@ void load()
               {{ activeTab.error }}
               <span v-if="activeTab.result" class="hint">· {{ t('db.showingStaleResult') }}</span>
             </div>
-            <template v-if="activeTab.result && (activeTab.result.columns?.length ?? 0) > 0">
+            <template
+              v-if="activeTab.result && (activeTab.result.columns?.length ?? 0) > 0 && (activeTab.result.rows?.length ?? 0) > 0"
+            >
               <div class="result-meta">
                 {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
                 <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
@@ -2634,6 +2636,9 @@ void load()
               <template v-else>
                 <div class="empty-glyph">▤</div>
                 <div>{{ t('db.empty.table') }}</div>
+                <div class="empty-actions">
+                  <n-button size="small" @click="reloadTableData(activeTab, true)">{{ t('db.refresh') }}</n-button>
+                </div>
               </template>
             </div>
           </div>
