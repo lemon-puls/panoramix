@@ -29,6 +29,7 @@ import ColumnModal from './ColumnModal.vue'
 import IndexModal from './IndexModal.vue'
 import AIPanel from './AIPanel.vue'
 import AISettingsModal from './AISettingsModal.vue'
+import { buildRowUpdates, countPendingEdits, type PendingEdit } from './dbEditing'
 
 // 数据库视图（HeidiSQL 风格）：
 // 左：连接 → 库 → 表 树；右：SQL 工作台（编辑器 + 结果/结构）或 Redis 值查看器
@@ -75,7 +76,7 @@ async function onSaved() {
 
 async function askDelete(c: models.store.DBConn) {
   // 删除当前连接会清空全部标签；先保护未提交修改
-  if (c.id === activeId.value && !(await confirmDiscardPending(pendingCount()))) return
+  if (c.id === activeId.value && !(await guardPendingTabs(dataTabsWithPending()))) return
   dialog.warning({
     title: t('tree.deleteTitle'),
     content: t('db.deleteConfirm', { name: c.name }),
@@ -98,7 +99,7 @@ async function askDelete(c: models.store.DBConn) {
 // 不要在其他地方直接给 activeId 赋值（删除连接/首次加载除外，那两条路径没有 pending）。
 async function selectConn(c: models.store.DBConn) {
   if (c.id === activeId.value) return
-  if (!(await confirmDiscardPending(pendingCount()))) return
+  if (!(await guardPendingTabs(dataTabsWithPending()))) return
   activeId.value = c.id
 }
 
@@ -163,9 +164,8 @@ async function toggleDb(db: string) {
 // 保护在动作入口 await：只有确认后才改标签/表名，取消时界面保持原状。
 async function openTableStructure(db: string, table: models.db.TableInfo) {
   const prior = currentDataTab()
-  const sameTable = !!prior && prior.database === db && prior.table === table.name
-  // 切到另一张表会丢 pending；同一张表且已有结果时不重载，不打扰用户
-  if (!sameTable && !(await confirmDiscardDataTab(prior))) return
+  // 打开/查看结构前也保护 pending（即使还是同一张表，DDL 可能让旧值失效）
+  if (!(await guardPendingTabs(prior ? [prior] : []))) return
 
   const structTab = ensureStructureTab(db, table.name)
   const dataTab = ensureDataTab(db, table.name)
@@ -173,9 +173,7 @@ async function openTableStructure(db: string, table: models.db.TableInfo) {
   const needLoad = !(dataTab.result && dataTab.database === db && dataTab.table === table.name)
   await Promise.all([
     loadTableStructure(structTab),
-    needLoad
-      ? loadTableData(dataTab, true, sameTable ? 'plain' : 'discard')
-      : Promise.resolve(),
+    needLoad ? loadTableData(dataTab, true, 'discard') : Promise.resolve(),
   ])
 }
 
@@ -266,7 +264,8 @@ function ensureDataTab(db: string, tableName: string): WorkTab {
 // 双击表 → 激活固定的「数据」标签并加载
 // 双击是显式重查：即使表没变也要先确认未提交修改
 async function openTableData(db: string, table: models.db.TableInfo) {
-  if (!(await confirmDiscardDataTab(currentDataTab()))) return
+  const prior = currentDataTab()
+  if (!(await guardPendingTabs(prior ? [prior] : []))) return
   ensureStructureTab(db, table.name)
   const tab = ensureDataTab(db, table.name)
   activeTabId.value = tab.id
@@ -303,7 +302,7 @@ interface WorkTab {
   pinned: boolean
   // 数据编辑
   pkColumns: string[]
-  pending: { row: number; col: number; value: string }[]
+  pending: PendingEdit[]
   editing: { row: number; col: number } | null
   gridSortCol: number
   gridSortDir: 1 | -1
@@ -389,7 +388,7 @@ async function closeTab(id: string) {
   const tab = tabs.value[idx]
   if (!canCloseTab(tab)) return
   // 数据标签目前固定（pinned）不可关闭；这里仍兜底保护，避免未来放开后静默丢修改
-  if (!(await confirmDiscardDataTab(tab))) return
+  if (!(await guardPendingTabs([tab]))) return
   tabs.value.splice(idx, 1)
   if (activeTabId.value === id) activeTabId.value = tabs.value.at(-1)?.id ?? ''
 }
@@ -487,117 +486,150 @@ function pendingValue(tab: WorkTab, row: number, col: number): string | null {
 
 // ---------- 待提交编辑保护 ----------
 //
-// 原则：任何会清空 pending 的动作（重查/切表/切连接/关标签/切视图）都必须先确认。
+// 原则：任何会清空 pending 的动作（重查/切表/切连接/关标签/切视图/DDL）都必须先确认。
 // loadTableData 只接受显式 intent，普通调用在 pending > 0 时直接拒绝，
 // 防止未来新增入口绕过保护而静默丢数据。
 
 type LoadIntent = 'plain' | 'discard' | 'applied'
+type PendingDecision = 'proceed' | 'cancel' | 'discard' | 'apply'
 
 // 当前连接的数据标签（全局唯一）
 function currentDataTab(): WorkTab | undefined {
   return tabs.value.find((x) => x.kind === 'data' && x.connId === activeId.value)
 }
 
+function dataTabsWithPending(): WorkTab[] {
+  return tabs.value.filter((x) => x.kind === 'data' && x.pending.length > 0)
+}
+
 // 当前连接全部数据标签的未提交修改总数
 function pendingCount(): number {
-  return tabs.value.filter((x) => x.kind === 'data').reduce((n, x) => n + x.pending.length, 0)
+  return countPendingEdits(tabs.value.filter((x) => x.kind === 'data'))
 }
 
 // 同一时间只允许一个保护弹窗：弹窗期间的重复点击直接拒绝，
 // 避免叠出多个确认框或“第二个动作在用户确认前就执行”。
 let pendingGuardOpen = false
 
-function confirmDiscardPending(n: number): Promise<boolean> {
-  if (n <= 0) return Promise.resolve(true)
-  if (pendingGuardOpen) return Promise.resolve(false)
+// 三选一确认框：取消 / 丢弃并继续 / 应用并继续。
+// Naive UI 的 positive/negative 只有两个按钮，因此用 dialog.create 自定义 action。
+function askPendingDecision(n: number): Promise<PendingDecision> {
+  if (pendingGuardOpen) return Promise.resolve('cancel')
   pendingGuardOpen = true
   return new Promise((resolve) => {
     let done = false
-    const finish = (v: boolean) => {
+    let dlg: { destroy: () => void } | null = null
+    const finish = (decision: PendingDecision) => {
       if (done) return
       done = true
       pendingGuardOpen = false
-      resolve(v)
+      dlg?.destroy()
+      resolve(decision)
     }
-    dialog.warning({
+    const button = (text: string, kind: 'default' | 'primary', onClick: () => void) =>
+      h(
+        NButton,
+        { size: 'small', type: kind === 'primary' ? 'primary' : 'default', onClick },
+        { default: () => text },
+      )
+    dlg = dialog.create({
+      type: 'warning',
       title: t('db.pendingTitle'),
-      content: t('db.pendingDiscard', { n }),
-      positiveText: t('db.pendingContinue'),
-      negativeText: t('common.cancel'),
-      onPositiveClick: () => finish(true),
-      onNegativeClick: () => finish(false),
-      onClose: () => finish(false),
+      content: () => h('div', t('db.pendingDiscard', { n })),
+      action: () =>
+        h('div', { style: 'display:flex;justify-content:flex-end;gap:8px;margin-top:16px' }, [
+          button(t('common.cancel'), 'default', () => finish('cancel')),
+          button(t('db.pendingDiscardAction'), 'default', () => finish('discard')),
+          button(t('db.pendingApplyContinue'), 'primary', () => finish('apply')),
+        ]),
+      closable: false,
+      maskClosable: false,
+      closeOnEsc: false,
+      onClose: () => finish('cancel'),
     })
   })
 }
 
-async function confirmDiscardDataTab(tab: WorkTab | null | undefined): Promise<boolean> {
-  if (!tab || tab.pending.length === 0) return true
-  return confirmDiscardPending(tab.pending.length)
+async function decidePending(targets: WorkTab[]): Promise<PendingDecision> {
+  const withPending = targets.filter((tab) => tab.pending.length > 0)
+  if (withPending.length === 0) return 'proceed'
+  return askPendingDecision(countPendingEdits(withPending))
 }
 
-// 数据标签重查入口（刷新/筛选/页大小）：先确认，再加载
-async function reloadTableData(tab: WorkTab, resetPage = false): Promise<void> {
-  if (!(await confirmDiscardDataTab(tab))) return
-  await loadTableData(tab, resetPage, 'discard')
+// 丢弃 pending：只清界面状态，不碰数据库
+function discardPendingTabs(targets: WorkTab[]) {
+  for (const tab of targets) {
+    tab.pending = []
+    tab.editing = null
+  }
 }
 
-// 生成参数化更新请求并交给后端执行。
-// 值不再拼进 SQL：反斜杠、单引号、NUL、emoji 都由数据库驱动按参数处理。
-// 约定：输入大写的 NULL 表示置空（与 i18n 提示一致），其余按字面量写入。
-async function applyEdits(tab: WorkTab) {
-  if (!tab.result || tab.pending.length === 0) return
+// 把数据标签的修改写入数据库（不重查）。成功返回 true 并清空 pending；
+// 失败时后端整批回滚，pending 保留，用户可修正后重试。
+async function persistEdits(tab: WorkTab): Promise<boolean> {
+  if (!tab.result || tab.pending.length === 0) return true
   const columns = tab.result.columns
-  // 使用与界面一致的视图（排序后），确保行索引对应
-  const rows = sortedRows(tab)
-  const idxOf = (name: string) => columns.findIndex((c) => c === name)
-  const pkIdx = tab.pkColumns.map(idxOf)
-  if (pkIdx.some((i) => i < 0)) {
+  if (tab.pkColumns.some((name) => !columns.includes(name))) {
     message.error(t('db.noPrimaryKey'))
-    return
+    return false
   }
-
-  // 按行分组：一行多列合并为一条 UPDATE（后端在单事务内执行）
-  const byRow = new Map<number, { row: number; col: number; value: string }[]>()
-  for (const p of tab.pending) {
-    const list = byRow.get(p.row) ?? []
-    list.push(p)
-    byRow.set(p.row, list)
-  }
-  const updates: models.db.RowUpdate[] = []
-  for (const [rowIdx, edits] of byRow) {
-    const rowData = rows[rowIdx]
-    if (!rowData) continue
-    const pk: Record<string, string | null> = {}
-    for (const name of tab.pkColumns) pk[name] = rowData[idxOf(name)] ?? null
-    const set: Record<string, string | null> = {}
-    for (const e of edits) {
-      const col = columns[e.col]
-      if (!col) continue
-      set[col] = e.value === 'NULL' ? null : e.value
-    }
-    if (Object.keys(set).length === 0) continue
-    updates.push({ pk, set })
-  }
-  if (updates.length === 0) return
+  const updates: models.db.RowUpdate[] = buildRowUpdates(
+    tab.pending,
+    sortedRows(tab),
+    columns,
+    tab.pkColumns,
+  )
+  if (updates.length === 0) return true
 
   tab.loading = true
   try {
     const applied = await DBUpdateRows(tab.connId, tab.database, tab.table, updates)
+    tab.pending = []
+    tab.editing = null
     message.success(t('db.editsApplied', { n: applied }))
-    // 已成功提交，允许重查清空 pending
-    await loadTableData(tab, false, 'applied')
+    return true
   } catch (e) {
-    // 后端整批事务失败即回滚，pending 保留，用户可以修正后重试
     message.error(String(e))
+    return false
   } finally {
     tab.loading = false
   }
 }
 
+async function persistPendingTabs(targets: WorkTab[]): Promise<boolean> {
+  for (const tab of targets) {
+    if (tab.pending.length === 0) continue
+    if (!(await persistEdits(tab))) return false
+  }
+  return true
+}
+
+// 统一守卫：无 pending 直接放行；否则按用户选择取消 / 丢弃 / 先应用。
+// 返回 false 表示原操作必须中止（用户取消，或“应用并继续”执行失败）。
+async function guardPendingTabs(targets: WorkTab[]): Promise<boolean> {
+  const decision = await decidePending(targets)
+  if (decision === 'cancel') return false
+  if (decision === 'apply') return persistPendingTabs(targets)
+  if (decision === 'discard') discardPendingTabs(targets)
+  return true
+}
+
+// 数据标签重查入口（刷新/筛选/页大小）：先确认，再加载
+async function reloadTableData(tab: WorkTab, resetPage = false): Promise<void> {
+  if (!(await guardPendingTabs([tab]))) return
+  await loadTableData(tab, resetPage, 'discard')
+}
+
+// 应用按钮：先写库，成功后刷新
+async function applyEdits(tab: WorkTab) {
+  if (!(await persistEdits(tab))) return
+  // 已成功提交，允许重查清空 pending
+  await loadTableData(tab, false, 'applied')
+}
+
 async function sortTableByColumn(tab: WorkTab, colName: string) {
   // 先确认再改排序：取消时排序状态与页码都不变
-  if (!(await confirmDiscardDataTab(tab))) return
+  if (!(await guardPendingTabs([tab]))) return
   if (tab.sortCol === colName) tab.sortDir = tab.sortDir === 1 ? -1 : 1
   else {
     tab.sortCol = colName
@@ -611,14 +643,14 @@ function hasNextPage(tab: WorkTab): boolean {
 }
 
 async function nextPage(tab: WorkTab) {
-  if (!(await confirmDiscardDataTab(tab))) return
+  if (!(await guardPendingTabs([tab]))) return
   tab.page++
   void loadTableData(tab, false, 'discard')
 }
 
 async function prevPage(tab: WorkTab) {
   if (tab.page === 0) return
-  if (!(await confirmDiscardDataTab(tab))) return
+  if (!(await guardPendingTabs([tab]))) return
   tab.page--
   void loadTableData(tab, false, 'discard')
 }
@@ -626,7 +658,7 @@ async function prevPage(tab: WorkTab) {
 // 页大小：先确认再改值；取消时下拉框仍显示原值（:value 绑定）
 async function changePageSize(tab: WorkTab, size: number | null) {
   if (size == null || size === tab.pageSize) return
-  if (!(await confirmDiscardDataTab(tab))) return
+  if (!(await guardPendingTabs([tab]))) return
   tab.pageSize = size
   tab.page = 0
   void loadTableData(tab, false, 'discard')
@@ -1175,7 +1207,7 @@ watch(activeId, (next, prev) => {
 // 注册/注销视图切换守卫：切到终端视图会卸载本组件，必须在卸载前确认
 onMounted(() => {
   if (!viewGuard) return
-  viewGuard.fn = () => confirmDiscardPending(pendingCount())
+  viewGuard.fn = () => guardPendingTabs(dataTabsWithPending())
 })
 onBeforeUnmount(() => {
   if (viewGuard) viewGuard.fn = null
