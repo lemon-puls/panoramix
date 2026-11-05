@@ -38,6 +38,8 @@
 │   ├── store/         # models / Store 接口 / sqlite 实现 / SecretStore(keyring)
 │   ├── ssh/           # M2：SessionPool、Auth、TOFU(knownhosts)、PTY 读写
 │   ├── sftp/          # M3：TransferQueue（goroutine 池、可暂停架构）
+│   ├── db/            # MySQL/Redis 连接池；数据标签查询 builder（table_query.go）
+│   │                  # 与参数化写入（mysql.go: RowUpdate/UpdateRows）
 │   ├── ai/            # v0.3.1：OpenAI 兼容客户端、payload 构造、DDL 脱敏、SQL 判定
 │   └── app/           # Service：全部绑定方法 + 事件发射
 └── frontend/
@@ -80,6 +82,19 @@ v0.3.1 追加（AI SQL 助手，两阶段协议）：
 因此“预览 = 实发”；`AICancel(requestId)` 取消进行中的请求；`AIClearConsents` 清除
 按 endpoint 记录的非本机（LAN/云端）授权。
 
+v0.3.2 追加（数据标签增强，无新事件）：
+- `DBTableData(connID, TableQuery)`：结构化条件/RawWhere 由 `internal/db`
+  校验并参数化生成 SQL；一次 `SHOW FULL COLUMNS` 同时返回结果、列元数据
+  （含 Comment/PK/Default）与可读 `executedSql`。
+- `DBPreviewTableSQL(connID, TableQuery)`：与执行同一 builder 的可读 SQL
+  预览（不执行；固定 page=0 用于筛选草稿预览）。
+- `DBUpdateRows(connID, database, table, []RowUpdate)`：参数化 + 单事务 +
+  写前校验 PK 列集合/列存在性；错误统一 `code: message`。
+- `GetGridPref / SetGridPref / DeleteGridPrefsByPrefix`：列可见性偏好，
+  存储在 `settings` 表（`grid.columns.<connId>.<db>.<table>`），删除连接时清理。
+- 所有数据标签查询错误使用稳定 code（前端按 `db.err.<code>` 映射 i18n）；
+  日志只记录表名/模式/条件数/耗时/错误码，不记录值、RawWhere、结果行。
+
 ### 事件（后端 → 前端，Wails Events）
 
 | 事件 | 载荷 | 时机 |
@@ -107,6 +122,10 @@ camelCase 以与现有代码一致；全量统一命名另开任务，不在本�
   last_connected_at, sort, 时间戳
 - `snippets`：id, name, content, sort, 时间戳
 - `settings`：key-value（仅非敏感配置）
+- **列可见性偏好（v0.3.2）**：`grid.columns.<connId>.<database>.<table>` =
+  `{"v":1,"hidden":["col", ...]}`。只存列名（不存顺序）；读取时与当前列求交，
+  未知列忽略、全部隐藏时修复为至少一列。删除连接时按前缀清理。
+  筛选条件、筛选模式、高级 WHERE、页码、排序均不持久化。
 - **AI 配置（v0.3.1）**：`ai.enabled / ai.provider / ai.base_url / ai.model /
   ai.temperature / ai.timeout_sec / ai.allow_write / ai.allow_insecure_tls /
   ai.concurrency / ai.cloud_consent`。`ai.cloud_consent` 是
