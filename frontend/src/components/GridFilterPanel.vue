@@ -90,7 +90,8 @@ function patchRow(index: number, patch: Partial<FilterCondition>) {
   update(next)
 }
 
-function changeColumn(index: number, column: string) {
+function changeColumn(index: number, column: string | number | null) {
+  if (typeof column !== 'string') return
   const col = props.columns.find((c) => c.field === column)
   const type = col?.type ?? ''
   const row = props.draft[index]
@@ -99,8 +100,9 @@ function changeColumn(index: number, column: string) {
   patchRow(index, { column, op })
 }
 
-function changeOp(index: number, op: FilterOp) {
-  patchRow(index, { op })
+function changeOp(index: number, op: string | number | null) {
+  if (typeof op !== 'string') return
+  patchRow(index, { op: op as FilterOp })
 }
 
 function togglePreview() {
