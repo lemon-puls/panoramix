@@ -330,7 +330,7 @@ func quoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
-// ---------- 数据标签单元格写入（参数化 + 事务） ----------
+// ---------- 数据标签单元格写入（校验 + 参数化 + 事务） ----------
 
 // RowUpdate 一行更新：PK 用于主键定位，Set 为要写入的列。
 // map 的 value 为 nil 表示 SQL NULL。所有值都通过占位符传递，
@@ -343,6 +343,45 @@ type RowUpdate struct {
 // maxRowUpdates 单次批量更新上限，避免一次请求锁住长事务
 const maxRowUpdates = 1000
 
+// 稳定错误码：前端按 "code: message" 解析，不依赖英文消息文本。
+const (
+	errCodeInvalidUpdate  = "invalid_update"
+	errCodeTooManyUpdates = "too_many_updates"
+	errCodeUnknownColumn  = "unknown_column"
+	errCodePKMismatch     = "pk_mismatch"
+	errCodeMetadataFailed = "metadata_failed"
+	errCodeUpdateFailed   = "update_failed"
+)
+
+// ErrCodeDBManagerNotReady 是 app 层可复用的稳定错误码
+const ErrCodeDBManagerNotReady = "db_not_ready"
+
+// codedError 构造带稳定错误码的错误（格式：code: message）。
+// message 里只允许出现表名/列名等标识符，严禁拼接单元格值。
+func codedError(code, format string, args ...any) error {
+	return fmt.Errorf("%s: %s", code, fmt.Sprintf(format, args...))
+}
+
+// sortedStringKeys 返回 map 的有序键（生成 SQL / 错误消息时保持确定性）
+func sortedStringKeys(m map[string]*string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sortedBoolKeys 返回集合的有序键
+func sortedBoolKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // buildRowUpdateSQL 生成参数化的 UPDATE 语句与参数。
 // 库名/表名/列名全部反引号转义；值（包括主键值）全部走 `?` 占位符。
 // 主键值为 nil 时使用 `IS NULL`：MySQL 中 `col = NULL` 永不匹配。
@@ -350,26 +389,18 @@ func buildRowUpdateSQL(database, table string, u RowUpdate) (string, []any, erro
 	database = strings.TrimSpace(database)
 	table = strings.TrimSpace(table)
 	if database == "" || table == "" {
-		return "", nil, fmt.Errorf("database and table are required")
+		return "", nil, codedError(errCodeInvalidUpdate, "database and table are required")
 	}
 	if len(u.Set) == 0 {
-		return "", nil, fmt.Errorf("no columns to update")
+		return "", nil, codedError(errCodeInvalidUpdate, "no columns to update")
 	}
 	if len(u.PK) == 0 {
-		return "", nil, fmt.Errorf("primary key is required")
+		return "", nil, codedError(errCodePKMismatch, "primary key is required")
 	}
 
 	// map 遍历顺序随机；排序列名让生成 SQL 稳定、可断言、便于日志排查
-	setCols := make([]string, 0, len(u.Set))
-	for col := range u.Set {
-		setCols = append(setCols, col)
-	}
-	sort.Strings(setCols)
-	pkCols := make([]string, 0, len(u.PK))
-	for col := range u.PK {
-		pkCols = append(pkCols, col)
-	}
-	sort.Strings(pkCols)
+	setCols := sortedStringKeys(u.Set)
+	pkCols := sortedStringKeys(u.PK)
 
 	var b strings.Builder
 	args := make([]any, 0, len(setCols)+len(pkCols))
@@ -410,13 +441,118 @@ func nullableArg(v *string) any {
 	return *v
 }
 
+// validateRowUpdates 在任何 Exec 之前校验更新集合。
+// 关键约束：PK 键集合必须与表的主键列完全一致 —— 只传复合主键的一部分
+// 会生成范围过宽的 WHERE，一次更新多行（QA 已在真实 MySQL 8.4 复现）。
+func validateRowUpdates(columns, pkColumns map[string]bool, updates []RowUpdate) error {
+	if len(updates) > maxRowUpdates {
+		return codedError(errCodeTooManyUpdates, "got %d row updates, max %d", len(updates), maxRowUpdates)
+	}
+	if len(pkColumns) == 0 {
+		return codedError(errCodePKMismatch, "table has no primary key")
+	}
+	tablePK := sortedBoolKeys(pkColumns)
+	for i, u := range updates {
+		n := i + 1
+		if len(u.Set) == 0 {
+			return codedError(errCodeInvalidUpdate, "update #%d has no columns to set", n)
+		}
+		if len(u.PK) == 0 {
+			return codedError(errCodePKMismatch, "update #%d has an empty primary key", n)
+		}
+		// 先判断列是否存在，避免把“拼错列名”误报成主键不匹配
+		for _, col := range sortedStringKeys(u.PK) {
+			if !columns[col] {
+				return codedError(errCodeUnknownColumn, "update #%d: primary key column %q does not exist", n, col)
+			}
+		}
+		for _, col := range sortedStringKeys(u.Set) {
+			if !columns[col] {
+				return codedError(errCodeUnknownColumn, "update #%d: column %q does not exist", n, col)
+			}
+		}
+		for _, col := range sortedStringKeys(u.PK) {
+			if !pkColumns[col] {
+				return codedError(errCodePKMismatch, "update #%d: column %q is not a primary key column", n, col)
+			}
+		}
+		if len(u.PK) != len(pkColumns) {
+			return codedError(errCodePKMismatch,
+				"update #%d: primary key columns mismatch (table: %s; got: %s)",
+				n, strings.Join(tablePK, ","), strings.Join(sortedStringKeys(u.PK), ","))
+		}
+	}
+	return nil
+}
+
+// loadTableColumns 通过 SHOW FULL COLUMNS 读取全部列与主键列（Key == 'PRI'）。
+// 必须在任何 UPDATE 执行前调用：没有主键信息就无法保证 WHERE 只命中一行。
+func loadTableColumns(ctx context.Context, db *sql.DB, database, table string) (map[string]bool, map[string]bool, error) {
+	q := "SHOW FULL COLUMNS FROM " + quoteIdent(database) + "." + quoteIdent(table)
+	rows, err := db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, nil, codedError(errCodeMetadataFailed, "show full columns: %v", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, nil, codedError(errCodeMetadataFailed, "columns: %v", err)
+	}
+	fieldIdx, keyIdx := -1, -1
+	for i, c := range cols {
+		switch {
+		case strings.EqualFold(c, "Field"):
+			fieldIdx = i
+		case strings.EqualFold(c, "Key"):
+			keyIdx = i
+		}
+	}
+	if fieldIdx < 0 || keyIdx < 0 {
+		return nil, nil, codedError(errCodeMetadataFailed, "unexpected SHOW FULL COLUMNS result")
+	}
+
+	all := map[string]bool{}
+	pks := map[string]bool{}
+	vals := make([]any, len(cols))
+	ptrs := make([]any, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, nil, codedError(errCodeMetadataFailed, "scan: %v", err)
+		}
+		name := valueString(vals[fieldIdx])
+		if name == "" {
+			continue
+		}
+		all[name] = true
+		if strings.EqualFold(valueString(vals[keyIdx]), "PRI") {
+			pks[name] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, codedError(errCodeMetadataFailed, "rows: %v", err)
+	}
+	return all, pks, nil
+}
+
+// valueString 把 database/sql 扫出的值转成字符串（nil → ""）
+func valueString(v any) string {
+	if v == nil {
+		return ""
+	}
+	return formatValue(v)
+}
+
 // applyRowUpdates 在同一事务内执行全部 UPDATE。
 // 任一语句失败即回滚并返回 (0, err)：绝不留下"部分行已写入"的状态。
 // 返回值为实际执行的 UPDATE 语句数（每行一条）。
 func applyRowUpdates(ctx context.Context, db *sql.DB, database, table string, updates []RowUpdate) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
+		return 0, codedError(errCodeUpdateFailed, "begin transaction: %v", err)
 	}
 	// 提交成功后 Rollback 返回 ErrTxDone，忽略即可
 	defer func() { _ = tx.Rollback() }()
@@ -425,35 +561,57 @@ func applyRowUpdates(ctx context.Context, db *sql.DB, database, table string, up
 	for i, u := range updates {
 		stmt, args, err := buildRowUpdateSQL(database, table, u)
 		if err != nil {
-			return 0, fmt.Errorf("update #%d: %w", i+1, err)
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-			return 0, fmt.Errorf("update #%d: %w", i+1, err)
+			return 0, codedError(errCodeUpdateFailed, "update #%d: %v", i+1, err)
 		}
 		applied++
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit: %w", err)
+		return 0, codedError(errCodeUpdateFailed, "commit: %v", err)
 	}
 	return applied, nil
 }
 
+// updateRowsOnDB 读取元数据 → 校验 → 在事务中执行。
+// 校验失败时不会执行任何 UPDATE（也不开启事务）。
+func updateRowsOnDB(ctx context.Context, db *sql.DB, database, table string, updates []RowUpdate) (int64, error) {
+	database = strings.TrimSpace(database)
+	table = strings.TrimSpace(table)
+	if database == "" || table == "" {
+		return 0, codedError(errCodeInvalidUpdate, "database and table are required")
+	}
+	columns, pkColumns, err := loadTableColumns(ctx, db, database, table)
+	if err != nil {
+		return 0, err
+	}
+	if err := validateRowUpdates(columns, pkColumns, updates); err != nil {
+		return 0, err
+	}
+	return applyRowUpdates(ctx, db, database, table, updates)
+}
+
 // UpdateRows 按主键批量更新单元格。整批放在一个事务内：
 // 任一语句失败则全部回滚，前端不会看到"应用了 X/Y"的中间状态。
+// 执行前先用 SHOW FULL COLUMNS 校验列与主键集合。
 func (m *Manager) UpdateRows(c store.DBConn, password, database, table string, updates []RowUpdate) (int64, error) {
 	if len(updates) == 0 {
 		return 0, nil
 	}
 	if len(updates) > maxRowUpdates {
-		return 0, fmt.Errorf("too many row updates: %d (max %d)", len(updates), maxRowUpdates)
+		return 0, codedError(errCodeTooManyUpdates, "got %d row updates, max %d", len(updates), maxRowUpdates)
+	}
+	if strings.TrimSpace(database) == "" || strings.TrimSpace(table) == "" {
+		return 0, codedError(errCodeInvalidUpdate, "database and table are required")
 	}
 	db, err := m.Open(c, password)
 	if err != nil {
-		return 0, err
+		return 0, codedError(errCodeUpdateFailed, "open connection: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	return applyRowUpdates(ctx, db, database, table, updates)
+	return updateRowsOnDB(ctx, db, database, table, updates)
 }
 
 // ListDatabases 列出全部数据库（SHOW DATABASES，按名称排序）

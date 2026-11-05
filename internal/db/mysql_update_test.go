@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -193,6 +194,10 @@ type fakeConn struct {
 	failOn    map[int]error // 第 N 条（1-based）Exec 返回错误
 	commits   int
 	rollbacks int
+	// SHOW FULL COLUMNS 的模拟结果
+	metaCols []string
+	metaRows [][]driver.Value
+	queries  []string
 }
 
 func (c *fakeConn) Prepare(string) (driver.Stmt, error) {
@@ -210,6 +215,58 @@ func (c *fakeConn) ExecContext(_ context.Context, query string, args []driver.Na
 		return nil, err
 	}
 	return driver.RowsAffected(1), nil
+}
+
+func (c *fakeConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queries = append(c.queries, query)
+	if c.metaRows == nil {
+		return nil, errors.New("no metadata configured")
+	}
+	return &fakeRows{cols: c.metaCols, rows: c.metaRows}, nil
+}
+
+type fakeRows struct {
+	cols []string
+	rows [][]driver.Value
+	i    int
+}
+
+func (r *fakeRows) Columns() []string { return r.cols }
+func (r *fakeRows) Close() error      { return nil }
+func (r *fakeRows) Next(dest []driver.Value) error {
+	if r.i >= len(r.rows) {
+		return io.EOF
+	}
+	copy(dest, r.rows[r.i])
+	r.i++
+	return nil
+}
+
+type metaField struct{ name, key string }
+
+// newMetaConn 构造带 SHOW FULL COLUMNS 结果的 fake 连接
+func newMetaConn(fields ...metaField) *fakeConn {
+	cols := []string{"Field", "Type", "Collation", "Null", "Key", "Default", "Extra", "Privileges", "Comment"}
+	rows := make([][]driver.Value, 0, len(fields))
+	for _, f := range fields {
+		rows = append(rows, []driver.Value{
+			[]byte(f.name), []byte("varchar(64)"), []byte("utf8mb4"), []byte("NO"),
+			[]byte(f.key), nil, []byte(""), []byte("select"), []byte(""),
+		})
+	}
+	return &fakeConn{metaCols: cols, metaRows: rows}
+}
+
+func assertErrorCode(t *testing.T, err error, code string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error code %q, got nil", code)
+	}
+	if !strings.HasPrefix(err.Error(), code+": ") {
+		t.Fatalf("error %q does not start with %q", err.Error(), code+": ")
+	}
 }
 
 type fakeTx struct{ conn *fakeConn }
@@ -322,5 +379,144 @@ func TestApplyRowUpdatesRejectsInvalidBeforeWriting(t *testing.T) {
 	// 第一条已经执行，但事务回滚；关键是不提交
 	if conn.commits != 0 || conn.rollbacks != 1 {
 		t.Fatalf("commits=%d rollbacks=%d, want 0/1", conn.commits, conn.rollbacks)
+	}
+}
+
+// ---------- 主键/列校验（QA 回归：复合主键只传一列会更新多行） ----------
+
+func TestValidateRowUpdatesRejectsPartialCompositePK(t *testing.T) {
+	cols := map[string]bool{"id": true, "tenant_id": true, "name": true}
+	pks := map[string]bool{"id": true, "tenant_id": true}
+	updates := []RowUpdate{{
+		PK:  map[string]*string{"id": strPtr("1")}, // 少了 tenant_id
+		Set: map[string]*string{"name": strPtr("x")},
+	}}
+	assertErrorCode(t, validateRowUpdates(cols, pks, updates), errCodePKMismatch)
+}
+
+func TestValidateRowUpdatesRejectsNonPKColumnInPK(t *testing.T) {
+	cols := map[string]bool{"id": true, "tenant_id": true, "name": true}
+	pks := map[string]bool{"id": true, "tenant_id": true}
+	updates := []RowUpdate{{
+		PK:  map[string]*string{"id": strPtr("1"), "name": strPtr("x")},
+		Set: map[string]*string{"tenant_id": strPtr("t1")},
+	}}
+	assertErrorCode(t, validateRowUpdates(cols, pks, updates), errCodePKMismatch)
+}
+
+func TestValidateRowUpdatesRejectsUnknownColumns(t *testing.T) {
+	cols := map[string]bool{"id": true, "name": true}
+	pks := map[string]bool{"id": true}
+	// set 列不存在
+	assertErrorCode(t, validateRowUpdates(cols, pks, []RowUpdate{{
+		PK:  map[string]*string{"id": strPtr("1")},
+		Set: map[string]*string{"nope": strPtr("x")},
+	}}), errCodeUnknownColumn)
+	// 主键列不存在
+	assertErrorCode(t, validateRowUpdates(cols, pks, []RowUpdate{{
+		PK:  map[string]*string{"nope": strPtr("1")},
+		Set: map[string]*string{"name": strPtr("x")},
+	}}), errCodeUnknownColumn)
+}
+
+func TestValidateRowUpdatesRejectsTableWithoutPK(t *testing.T) {
+	cols := map[string]bool{"id": true, "name": true}
+	assertErrorCode(t, validateRowUpdates(cols, map[string]bool{}, []RowUpdate{{
+		PK:  map[string]*string{"id": strPtr("1")},
+		Set: map[string]*string{"name": strPtr("x")},
+	}}), errCodePKMismatch)
+}
+
+func TestValidateRowUpdatesRejectsTooManyRows(t *testing.T) {
+	cols := map[string]bool{"id": true, "name": true}
+	pks := map[string]bool{"id": true}
+	updates := make([]RowUpdate, maxRowUpdates+1)
+	pk := map[string]*string{"id": strPtr("1")}
+	set := map[string]*string{"name": strPtr("x")}
+	for i := range updates {
+		updates[i] = RowUpdate{PK: pk, Set: set}
+	}
+	assertErrorCode(t, validateRowUpdates(cols, pks, updates), errCodeTooManyUpdates)
+}
+
+func TestValidateRowUpdatesAcceptsCompositePK(t *testing.T) {
+	cols := map[string]bool{"id": true, "tenant_id": true, "name": true}
+	pks := map[string]bool{"id": true, "tenant_id": true}
+	err := validateRowUpdates(cols, pks, []RowUpdate{{
+		PK:  map[string]*string{"id": strPtr("1"), "tenant_id": strPtr("t1")},
+		Set: map[string]*string{"name": strPtr("x")},
+	}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUpdateRowsOnDBRejectsPartialCompositePKBeforeExec(t *testing.T) {
+	conn := newMetaConn(
+		metaField{name: "id", key: "PRI"},
+		metaField{name: "tenant_id", key: "PRI"},
+		metaField{name: "name", key: ""},
+	)
+	db := openFakeDB(t, conn)
+	updates := []RowUpdate{{
+		PK:  map[string]*string{"id": strPtr("1")}, // 只传复合主键的一部分
+		Set: map[string]*string{"name": strPtr("x")},
+	}}
+	applied, err := updateRowsOnDB(context.Background(), db, "app", "memberships", updates)
+	assertErrorCode(t, err, errCodePKMismatch)
+	if applied != 0 {
+		t.Fatalf("applied = %d, want 0", applied)
+	}
+	if len(conn.execs) != 0 {
+		t.Fatalf("no UPDATE may run before validation, got %d", len(conn.execs))
+	}
+	if len(conn.queries) != 1 || !strings.Contains(conn.queries[0], "SHOW FULL COLUMNS") {
+		t.Fatalf("expected one SHOW FULL COLUMNS metadata query, got %#v", conn.queries)
+	}
+}
+
+func TestUpdateRowsOnDBRejectsUnknownColumnBeforeExec(t *testing.T) {
+	conn := newMetaConn(
+		metaField{name: "id", key: "PRI"},
+		metaField{name: "name", key: ""},
+	)
+	db := openFakeDB(t, conn)
+	applied, err := updateRowsOnDB(context.Background(), db, "app", "users", []RowUpdate{{
+		PK:  map[string]*string{"id": strPtr("1")},
+		Set: map[string]*string{"missing_col": strPtr("x")},
+	}})
+	assertErrorCode(t, err, errCodeUnknownColumn)
+	if applied != 0 || len(conn.execs) != 0 {
+		t.Fatalf("applied=%d execs=%d, want 0/0", applied, len(conn.execs))
+	}
+}
+
+func TestUpdateRowsOnDBWritesCompositePKWithBothColumns(t *testing.T) {
+	conn := newMetaConn(
+		metaField{name: "id", key: "PRI"},
+		metaField{name: "tenant_id", key: "PRI"},
+		metaField{name: "name", key: ""},
+	)
+	db := openFakeDB(t, conn)
+	applied, err := updateRowsOnDB(context.Background(), db, "app", "memberships", []RowUpdate{{
+		PK:  map[string]*string{"tenant_id": strPtr("t1"), "id": strPtr("1")},
+		Set: map[string]*string{"name": strPtr("x")},
+	}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("applied = %d, want 1", applied)
+	}
+	if len(conn.execs) != 1 {
+		t.Fatalf("execs = %d, want 1", len(conn.execs))
+	}
+	sqlText := conn.execs[0].query
+	if !strings.Contains(sqlText, "WHERE `id` = ? AND `tenant_id` = ?") {
+		t.Fatalf("composite PK not fully constrained: %s", sqlText)
+	}
+	args := conn.execs[0].args
+	if len(args) != 3 || args[0].Value != "x" || args[1].Value != "1" || args[2].Value != "t1" {
+		t.Fatalf("unexpected args: %#v", args)
 	}
 }

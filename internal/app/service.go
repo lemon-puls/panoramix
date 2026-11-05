@@ -919,7 +919,7 @@ func (s *Service) DBQuery(id, sqlText string, limit int) (*db.Result, error) {
 // 任一语句失败即全部回滚。日志只记录表名/行数与脱敏后的错误，不记录值。
 func (s *Service) DBUpdateRows(id, database, table string, updates []db.RowUpdate) (int64, error) {
 	if s.dbmgr == nil {
-		return 0, fmt.Errorf("db manager not ready")
+		return 0, fmt.Errorf("%s: db manager not ready", db.ErrCodeDBManagerNotReady)
 	}
 	c, pw, err := s.dbConnAndPassword(id)
 	if err != nil {
