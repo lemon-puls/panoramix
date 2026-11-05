@@ -164,13 +164,16 @@ async function toggleDb(db: string) {
 // 保护在动作入口 await：只有确认后才改标签/表名，取消时界面保持原状。
 async function openTableStructure(db: string, table: models.db.TableInfo) {
   const prior = currentDataTab()
+  const hadPending = !!prior && prior.pending.length > 0
   // 打开/查看结构前也保护 pending（即使还是同一张表，DDL 可能让旧值失效）
   if (!(await guardPendingTabs(prior ? [prior] : []))) return
 
   const structTab = ensureStructureTab(db, table.name)
   const dataTab = ensureDataTab(db, table.name)
   activeTabId.value = structTab.id
-  const needLoad = !(dataTab.result && dataTab.database === db && dataTab.table === table.name)
+  // 刚应用/丢弃过修改时必须刷新同表数据，否则网格仍显示旧值
+  const needLoad =
+    hadPending || !(dataTab.result && dataTab.database === db && dataTab.table === table.name)
   await Promise.all([
     loadTableStructure(structTab),
     needLoad ? loadTableData(dataTab, true, 'discard') : Promise.resolve(),
@@ -442,6 +445,8 @@ async function loadTableData(tab: WorkTab, resetPage = false, intent: LoadIntent
 const cellInput = ref('')
 
 function startEdit(tab: WorkTab, row: number, col: number) {
+  // 写入进行中不允许新开编辑，否则成功后清空 pending 会吞掉新修改
+  if (tab.loading) return
   if (!tab.pkColumns.length) {
     message.warning(t('db.noPrimaryKey'))
     return
@@ -575,6 +580,8 @@ function discardPendingTabs(targets: WorkTab[]) {
 // 失败时后端整批回滚，pending 保留，用户可修正后重试。
 async function persistEdits(tab: WorkTab): Promise<boolean> {
   if (!tab.result || tab.pending.length === 0) return true
+  // 写入进行中禁止再次应用：避免同一批 pending 被重复提交
+  if (tab.loading) return false
   const columns = tab.result.columns
   if (tab.pkColumns.some((name) => !columns.includes(name))) {
     message.error(t('db.noPrimaryKey'))
@@ -1415,7 +1422,7 @@ void load()
             <span class="edit-actions" :class="{ active: activeTab.pending.length > 0 }">
               <button
                 class="cell-edit-btn apply"
-                :disabled="activeTab.pending.length === 0"
+                :disabled="activeTab.pending.length === 0 || activeTab.loading"
                 :title="t('db.applyEdits', { n: activeTab.pending.length })"
                 @click="applyEdits(activeTab)"
               >
@@ -1425,7 +1432,7 @@ void load()
               </button>
               <button
                 class="cell-edit-btn discard"
-                :disabled="activeTab.pending.length === 0"
+                :disabled="activeTab.pending.length === 0 || activeTab.loading"
                 :title="t('db.discardEdits')"
                 @click="discardEdits(activeTab)"
               >
