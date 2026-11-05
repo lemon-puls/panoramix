@@ -866,7 +866,57 @@ func (s *Service) DeleteDBConn(id string) error {
 	if s.dbmgr != nil {
 		s.dbmgr.CloseConn(id)
 	}
+	// 清理该连接的列可见性偏好（key: grid.columns.<connId>.<db>.<table>）
+	if err := s.store.DeleteSettingsByPrefix(gridPrefPrefix + id + "."); err != nil {
+		log.Printf("[app] delete grid prefs for conn failed: %v", err)
+	}
 	return nil
+}
+
+// ---------- 数据标签列可见性偏好（settings 表） ----------
+
+// gridPrefPrefix 是列可见性偏好的 key 前缀；前端按连接/库/表拼完整 key。
+const gridPrefPrefix = "grid.columns."
+
+func validateGridPrefKey(key string) error {
+	if !strings.HasPrefix(key, gridPrefPrefix) || len(key) > 512 {
+		return fmt.Errorf("invalid_grid_pref: bad key")
+	}
+	return nil
+}
+
+// GetGridPref 读取列可见性偏好；不存在时返回空串（不是错误）
+func (s *Service) GetGridPref(key string) (string, error) {
+	if err := validateGridPrefKey(key); err != nil {
+		return "", err
+	}
+	v, ok, err := s.store.GetSetting(key)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", nil
+	}
+	return v, nil
+}
+
+// SetGridPref 写入列可见性偏好（非敏感 UI 状态）
+func (s *Service) SetGridPref(key, value string) error {
+	if err := validateGridPrefKey(key); err != nil {
+		return err
+	}
+	if len(value) > 64*1024 {
+		return fmt.Errorf("invalid_grid_pref: value too large")
+	}
+	return s.store.SetSetting(key, value)
+}
+
+// DeleteGridPrefsByPrefix 删除某个连接前缀下的全部列偏好
+func (s *Service) DeleteGridPrefsByPrefix(prefix string) error {
+	if !strings.HasPrefix(prefix, gridPrefPrefix) {
+		return fmt.Errorf("invalid_grid_pref: bad prefix")
+	}
+	return s.store.DeleteSettingsByPrefix(prefix)
 }
 
 // dbConnAndPassword 取连接配置与密码（密码仅内存）

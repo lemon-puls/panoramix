@@ -34,6 +34,8 @@ type Store interface {
 
 	GetSetting(key string) (string, bool, error)
 	SetSetting(key, value string) error
+	// DeleteSettingsByPrefix 删除以 prefix 开头的所有设置（如 grid.columns.<connId>.）
+	DeleteSettingsByPrefix(prefix string) error
 }
 
 // SecretStore 系统凭据存取接口（OS keychain 实现；

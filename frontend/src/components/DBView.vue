@@ -2,7 +2,7 @@
 import { computed, h, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
-import { NButton, NInput, NInputNumber, NSelect } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NPopover, NSelect } from 'naive-ui'
 import {
   DBDescribeTable,
   DBListDatabases,
@@ -14,6 +14,7 @@ import {
   DBTableMeta,
   DBUpdateRows,
   DeleteDBConn,
+  GetGridPref,
   ListDBConns,
   RedisDeleteKey,
   RedisGetValue,
@@ -21,6 +22,7 @@ import {
   RedisSetString,
   RedisSetTTL,
   SaveDBConn,
+  SetGridPref,
   TestDBConn,
 } from '../../wailsjs/go/app/Service'
 import * as models from '../../wailsjs/go/models'
@@ -29,7 +31,15 @@ import ColumnModal from './ColumnModal.vue'
 import IndexModal from './IndexModal.vue'
 import AIPanel from './AIPanel.vue'
 import AISettingsModal from './AISettingsModal.vue'
+import GridColumnsPanel from './GridColumnsPanel.vue'
 import { buildRowUpdates, countPendingEdits, shouldBlockUnguardedSwitch, type PendingEdit } from './dbEditing'
+import {
+  gridPrefKey,
+  parseGridPref,
+  repairHidden,
+  serializeGridPref,
+  visibleColumnRefs as computeVisibleColumns,
+} from '../stores/gridPrefs'
 
 // 数据库视图（HeidiSQL 风格）：
 // 左：连接 → 库 → 表 树；右：SQL 工作台（编辑器 + 结果/结构）或 Redis 值查看器
@@ -258,10 +268,14 @@ function ensureDataTab(db: string, tableName: string): WorkTab {
       tab.result = null
       tab.pending = []
       tab.editing = null
+      tab.columns = []
       tab.pkColumns = []
       tab.gridSortCol = -1
       tab.selectedRow = -1
       tab.selectedCol = -1
+      tab.hiddenColumns = []
+      tab.columnsPrefLoaded = false
+      tab.columnsPanelOpen = false
     }
     return tab
   }
@@ -323,6 +337,10 @@ interface WorkTab {
   gridSortDir: 1 | -1
   selectedRow: number
   selectedCol: number
+  // 列可见性（按连接+库+表持久化到 settings 表）
+  hiddenColumns: string[]
+  columnsPrefLoaded: boolean
+  columnsPanelOpen: boolean
   // 最近一次实际执行的 SQL（修复模式用它，避免用户报错后改了编辑器导致对象错位）
   lastRunSql: string
   // AI 助手侧栏是否展开（按查询标签保存，仅前端状态）
@@ -368,6 +386,9 @@ function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
     gridSortDir: 1,
     selectedRow: -1,
     selectedCol: -1,
+    hiddenColumns: [],
+    columnsPrefLoaded: false,
+    columnsPanelOpen: false,
     lastRunSql: '',
     aiOpen: false,
     ...init,
@@ -432,14 +453,16 @@ async function loadTableData(tab: WorkTab, resetPage = false, intent: LoadIntent
   try {
     const [res, cols] = await Promise.all([
       DBQuery(tab.connId, buildTableSQL(tab), tab.pageSize),
-      tab.pkColumns.length === 0
-        ? DBDescribeTable(tab.connId, tab.database, tab.table).catch(() => [] as models.db.ColumnInfo[])
-        : Promise.resolve([] as models.db.ColumnInfo[]),
+      // 数据标签需要完整列定义（筛选操作符/列面板类型与注释/PK），
+      // 后续切换到 DBTableData 后由同一响应携带，避免这次额外往返。
+      DBDescribeTable(tab.connId, tab.database, tab.table).catch(() => [] as models.db.ColumnInfo[]),
     ])
     tab.result = res
     if (cols.length > 0) {
+      tab.columns = cols
       tab.pkColumns = cols.filter((c) => c.key === 'PRI').map((c) => c.field)
     }
+    await syncGridPref(tab)
     tab.gridSortCol = -1
     tab.selectedRow = -1
     tab.selectedCol = -1
@@ -452,6 +475,116 @@ async function loadTableData(tab: WorkTab, resetPage = false, intent: LoadIntent
     tab.loading = false
   }
 }
+
+// ---------- 列可见性 ----------
+
+// 可见列引用（原始索引必须保留：编辑/排序/CSV 都用它）
+function visibleColumnsOf(tab: WorkTab) {
+  return computeVisibleColumns(tab.hiddenColumns, tab.result?.columns ?? [])
+}
+
+// pending 中落在隐藏列上的条数（工具栏警告）
+function hiddenPendingColumns(tab: WorkTab): string[] {
+  const columns = tab.result?.columns ?? []
+  const hidden = new Set(tab.hiddenColumns)
+  const out = new Set<string>()
+  for (const p of tab.pending) {
+    const name = columns[p.col]
+    if (name && hidden.has(name)) out.add(name)
+  }
+  return [...out]
+}
+
+// 元数据加载失败时列面板仍可用：退化为只依赖 result.columns 的列名
+function columnsForPanel(tab: WorkTab): models.db.ColumnInfo[] {
+  if (tab.columns.length > 0) return tab.columns
+  return (tab.result?.columns ?? []).map(
+    (field) =>
+      ({
+        field,
+        type: '',
+        null: '',
+        key: '',
+        extra: '',
+        comment: '',
+      }) as models.db.ColumnInfo,
+  )
+}
+
+async function saveGridPref(tab: WorkTab) {
+  try {
+    await SetGridPref(
+      gridPrefKey(tab.connId, tab.database, tab.table),
+      serializeGridPref(tab.hiddenColumns),
+    )
+  } catch (e) {
+    // 偏好写入失败只影响记忆，不影响本次会话的显示
+    console.warn('[db] save grid prefs failed', e)
+  }
+}
+
+// 读取/修复列偏好。只在“首次加载该表”时读存储；之后只做求交修复。
+async function syncGridPref(tab: WorkTab) {
+  const columns = tab.result?.columns ?? []
+  if (columns.length === 0) return
+  if (!tab.columnsPrefLoaded) {
+    tab.columnsPrefLoaded = true
+    try {
+      const raw = await GetGridPref(gridPrefKey(tab.connId, tab.database, tab.table))
+      const { hidden, repaired } = repairHidden(parseGridPref(raw), columns)
+      tab.hiddenColumns = hidden
+      if (repaired) await saveGridPref(tab)
+    } catch (e) {
+      console.warn('[db] load grid prefs failed', e)
+      tab.hiddenColumns = []
+    }
+    return
+  }
+  const { hidden, repaired } = repairHidden(tab.hiddenColumns, columns)
+  tab.hiddenColumns = hidden
+  if (repaired) await saveGridPref(tab)
+}
+
+async function applyColumns(tab: WorkTab, hidden: string[]) {
+  const { hidden: valid } = repairHidden(hidden, tab.result?.columns ?? [])
+  tab.hiddenColumns = valid
+  tab.columnsPanelOpen = false
+  // 隐藏列不重新查询，只影响显示与 CSV
+  await saveGridPref(tab)
+}
+
+function openColumnsPanel(tab: WorkTab) {
+  if (!(tab.result?.columns?.length)) {
+    message.warning(t('db.colDisabled'))
+    return
+  }
+  tab.columnsPanelOpen = !tab.columnsPanelOpen
+}
+
+function columnsButtonTitle(tab: WorkTab): string {
+  const hidden = tab.hiddenColumns.length
+  return hidden > 0 ? t('db.colButtonHidden', { n: hidden }) : t('db.colButtonHint')
+}
+
+function hiddenPendingEditCount(tab: WorkTab): number {
+  const columns = tab.result?.columns ?? []
+  const hidden = new Set(tab.hiddenColumns)
+  return tab.pending.filter((p) => hidden.has(columns[p.col])).length
+}
+
+async function clearSort(tab: WorkTab) {
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, true, guard, () => {
+    tab.sortCol = ''
+  })
+}
+
+function toggleSortDirection(tab: WorkTab) {
+  if (tab.sortCol) void sortTableByColumn(tab, tab.sortCol)
+}
+
+
 
 // ---------- 数据单元格编辑 ----------
 
@@ -836,8 +969,14 @@ function exportCSV(tab: WorkTab) {
     if (v == null) return ''
     return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
   }
-  const lines = [tab.result.columns.map(esc).join(',')]
-  for (const row of sortedRows(tab)) lines.push(row.map(esc).join(','))
+  // \u6570\u636E\u6807\u7B7E\u53EA\u5BFC\u51FA\u5F53\u524D\u9875\u7684\u53EF\u89C1\u5217\uFF08\u4E0E\u5C4F\u5E55\u4E00\u81F4\uFF09\uFF1B\u67E5\u8BE2\u6807\u7B7E\u4FDD\u6301\u5168\u90E8\u5217
+  const columns = tab.result.columns
+  const refs =
+    tab.kind === 'data'
+      ? visibleColumnsOf(tab)
+      : columns.map((name, idx) => ({ name, idx }))
+  const lines = [refs.map((r) => esc(columns[r.idx])).join(',')]
+  for (const row of sortedRows(tab)) lines.push(refs.map((r) => esc(row[r.idx])).join(','))
   const blob = new Blob([`\uFEFF${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -845,6 +984,11 @@ function exportCSV(tab: WorkTab) {
   a.download = `${tab.table || 'query'}_${Date.now()}.csv`
   a.click()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+  if (tab.kind === 'data') {
+    message.success(
+      t('db.csvExported', { cols: refs.length, hidden: Math.max(0, columns.length - refs.length) }),
+    )
+  }
 }
 
 // 查看 DDL 前保护同表数据标签的 pending：
@@ -1456,6 +1600,55 @@ void load()
             <n-button size="small" :loading="activeTab.loading" @click="reloadTableData(activeTab, true)">
               {{ t('db.refresh') }}
             </n-button>
+            <n-popover
+              v-model:show="activeTab.columnsPanelOpen"
+              trigger="manual"
+              placement="bottom-start"
+              :show-arrow="false"
+              raw
+            >
+              <template #trigger>
+                <n-button
+                  size="small"
+                  class="grid-columns-trigger"
+                  :class="{ warn: activeTab.hiddenColumns.length > 0 }"
+                  :disabled="!(activeTab.result?.columns?.length)"
+                  :title="columnsButtonTitle(activeTab)"
+                  @click="openColumnsPanel(activeTab)"
+                >
+                  {{ t('db.colButton', {
+                    visible: visibleColumnsOf(activeTab).length,
+                    total: activeTab.result?.columns?.length ?? 0,
+                  }) }}
+                </n-button>
+              </template>
+              <GridColumnsPanel
+                v-if="activeTab.columnsPanelOpen"
+                :columns="columnsForPanel(activeTab)"
+                :hidden="activeTab.hiddenColumns"
+                @apply="applyColumns(activeTab, $event)"
+                @close="activeTab.columnsPanelOpen = false"
+              />
+            </n-popover>
+            <span
+              v-if="activeTab.sortCol && activeTab.hiddenColumns.includes(activeTab.sortCol)"
+              class="grid-sort-hidden"
+            >
+              <span
+                class="grid-sort-hidden-label"
+                :title="t('db.sortHidden', {
+                  column: activeTab.sortCol,
+                  dir: activeTab.sortDir === 1 ? '▲' : '▼',
+                })"
+                @click="toggleSortDirection(activeTab)"
+              >
+                {{ t('db.sortHidden', {
+                  column: activeTab.sortCol,
+                  dir: activeTab.sortDir === 1 ? '▲' : '▼',
+                }) }}
+              </span>
+              <span class="grid-sort-hidden-x" :title="t('db.clearSort')" @click="clearSort(activeTab)">×</span>
+            </span>
             <n-button size="small" @click="gotoStructure(activeTab)">{{ t('db.structureShort') }}</n-button>
             <span class="spacer" />
             <n-button size="small" :disabled="activeTab.page === 0" @click="prevPage(activeTab)">‹</n-button>
@@ -1468,10 +1661,22 @@ void load()
               style="width: 90px"
               @update:value="changePageSize(activeTab, $event)"
             />
-            <n-button size="small" :disabled="!(activeTab.result?.columns?.length)" @click="exportCSV(activeTab)">
-              CSV
+            <n-button
+              size="small"
+              :disabled="!(activeTab.result?.columns?.length)"
+              :title="t('db.csvTitle')"
+              @click="exportCSV(activeTab)"
+            >
+              {{ t('db.csvVisible') }}
             </n-button>
             <span class="edit-actions" :class="{ active: activeTab.pending.length > 0 }">
+              <span
+                v-if="hiddenPendingEditCount(activeTab)"
+                class="grid-hidden-pending"
+                :title="hiddenPendingColumns(activeTab).join(', ')"
+              >
+                ⚠ {{ t('db.hiddenPending', { n: hiddenPendingEditCount(activeTab) }) }}
+              </span>
               <button
                 class="cell-edit-btn apply"
                 :disabled="activeTab.pending.length === 0 || activeTab.loading"
@@ -1506,7 +1711,7 @@ void load()
                 {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
                 <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
                 <span class="spacer" />
-                <span class="hint">{{ t('db.clickSort') }} · {{ t('db.clickEdit') }}</span>
+                <span class="hint">{{ t('db.gridHint') }}</span>
               </div>
               <div class="grid-wrap">
                 <table class="grid">
@@ -1514,14 +1719,14 @@ void load()
                     <tr>
                       <th class="rownum">#</th>
                       <th
-                        v-for="c in activeTab.result.columns"
-                        :key="c"
+                        v-for="ref in visibleColumnsOf(activeTab)"
+                        :key="ref.name"
                         class="sortable"
                         :title="t('db.sortServerSide')"
-                        @click="sortTableByColumn(activeTab, c)"
+                        @click="sortTableByColumn(activeTab, ref.name)"
                       >
-                        {{ c }}
-                        <span v-if="activeTab.sortCol === c" class="sort">{{ activeTab.sortDir === 1 ? '▲' : '▼' }}</span>
+                        {{ ref.name }}
+                        <span v-if="activeTab.sortCol === ref.name" class="sort">{{ activeTab.sortDir === 1 ? '▲' : '▼' }}</span>
                       </th>
                     </tr>
                   </thead>
@@ -1529,17 +1734,17 @@ void load()
                     <tr v-for="(row, ri) in sortedRows(activeTab)" :key="ri">
                       <td class="rownum">{{ ri + 1 + activeTab.page * activeTab.pageSize }}</td>
                       <td
-                        v-for="(cell, ci) in row"
-                        :key="ci"
+                        v-for="ref in visibleColumnsOf(activeTab)"
+                        :key="ref.name"
                         :class="{
-                          null: cell === null,
-                          edited: pendingValue(activeTab, ri, ci) !== null,
-                          selected: activeTab.selectedRow === ri && activeTab.selectedCol === ci,
+                          null: row[ref.idx] === null,
+                          edited: pendingValue(activeTab, ri, ref.idx) !== null,
+                          selected: activeTab.selectedRow === ri && activeTab.selectedCol === ref.idx,
                         }"
-                        @click="activeTab.editing?.row === ri && activeTab.editing?.col === ci ? undefined : startEdit(activeTab, ri, ci)"
+                        @click="activeTab.editing?.row === ri && activeTab.editing?.col === ref.idx ? undefined : startEdit(activeTab, ri, ref.idx)"
                       >
                         <input
-                          v-if="activeTab.editing?.row === ri && activeTab.editing?.col === ci"
+                          v-if="activeTab.editing?.row === ri && activeTab.editing?.col === ref.idx"
                           v-model="cellInput"
                           class="cell-input"
                           autofocus
@@ -1549,7 +1754,7 @@ void load()
                           @click.stop
                         />
                         <template v-else>
-                          {{ pendingValue(activeTab, ri, ci) ?? (cell === null ? 'NULL' : cell) }}
+                          {{ pendingValue(activeTab, ri, ref.idx) ?? (row[ref.idx] === null ? 'NULL' : row[ref.idx]) }}
                         </template>
                       </td>
                     </tr>
@@ -2201,6 +2406,39 @@ void load()
 }
 .toolbar > * {
   flex-shrink: 0;
+}
+.grid-columns-trigger.warn {
+  color: var(--warning);
+  border-color: var(--warning);
+}
+.grid-sort-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 0 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.grid-sort-hidden-label {
+  cursor: pointer;
+}
+.grid-sort-hidden-label:hover {
+  color: var(--accent);
+}
+.grid-sort-hidden-x {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.grid-sort-hidden-x:hover {
+  color: var(--danger);
+}
+.grid-hidden-pending {
+  color: var(--warning);
+  font-size: 11px;
+  white-space: nowrap;
 }
 .ctx {
   font-size: 12px;

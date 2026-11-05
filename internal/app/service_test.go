@@ -192,3 +192,46 @@ func TestDBUpdateRowsStableErrorCode(t *testing.T) {
 		t.Fatalf("error %q does not start with %q", err.Error(), db.ErrCodeApplyEditsFailed+": ")
 	}
 }
+
+func TestGridPrefRoundTripAndCleanup(t *testing.T) {
+	svc, _ := newTestService(t)
+	key := "grid.columns.conn-1.demo.users"
+	if _, err := svc.GetGridPref(key); err != nil {
+		t.Fatalf("get missing pref: %v", err)
+	}
+	if err := svc.SetGridPref(key, `{"v":1,"hidden":["avatar"]}`); err != nil {
+		t.Fatalf("set pref: %v", err)
+	}
+	v, err := svc.GetGridPref(key)
+	if err != nil || v != `{"v":1,"hidden":["avatar"]}` {
+		t.Fatalf("pref round-trip: v=%q err=%v", v, err)
+	}
+	// 只允许 grid.columns. 前缀
+	if _, err := svc.GetGridPref("theme"); err == nil {
+		t.Fatal("non-grid key should be rejected")
+	}
+	if err := svc.DeleteGridPrefsByPrefix("grid.columns.conn-1."); err != nil {
+		t.Fatalf("delete prefix: %v", err)
+	}
+	if v, _ := svc.GetGridPref(key); v != "" {
+		t.Fatalf("pref should be deleted, got %q", v)
+	}
+
+	// 删除连接时自动清理该 connId 的偏好
+	c, err := svc.SaveDBConn(DBConnInput{
+		Name: "demo", Kind: "mysql", Addr: "127.0.0.1", Port: 3306, Username: "root",
+	})
+	if err != nil {
+		t.Fatalf("save conn: %v", err)
+	}
+	connKey := "grid.columns." + c.ID + ".demo.users"
+	if err := svc.SetGridPref(connKey, `{"v":1,"hidden":["name"]}`); err != nil {
+		t.Fatalf("set conn pref: %v", err)
+	}
+	if err := svc.DeleteDBConn(c.ID); err != nil {
+		t.Fatalf("delete conn: %v", err)
+	}
+	if v, _ := svc.GetGridPref(connKey); v != "" {
+		t.Fatalf("connection prefs should be cleaned, got %q", v)
+	}
+}

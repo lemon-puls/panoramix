@@ -514,6 +514,14 @@ func (s *sqliteStore) SetSetting(key, value string) error {
 	return err
 }
 
+// DeleteSettingsByPrefix 删除前缀匹配的设置。
+// 用 substr 而不是 LIKE，避免值里的 %/_ 需要额外转义。
+func (s *sqliteStore) DeleteSettingsByPrefix(prefix string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM settings WHERE substr(key, 1, length(?)) = ?`, prefix, prefix)
+	return err
+}
+
 func boolInt(b bool) int {
 	if b {
 		return 1

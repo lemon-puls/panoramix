@@ -472,65 +472,103 @@ func validateRowUpdates(columns, pkColumns map[string]bool, updates []RowUpdate)
 	return nil
 }
 
-// loadTableColumns 通过 SHOW FULL COLUMNS 读取全部列与主键列（Key == 'PRI'）。
-// 必须在任何 UPDATE 执行前调用：没有主键信息就无法保证 WHERE 只命中一行。
-func loadTableColumns(ctx context.Context, db *sql.DB, database, table string) (map[string]bool, map[string]bool, error) {
+// queryFullColumns 读取列的完整定义（SHOW FULL COLUMNS，含 Comment）。
+// DESCRIBE 不返回 Comment，列面板的注释搜索/提示依赖这里。
+func queryFullColumns(ctx context.Context, db *sql.DB, database, table string) ([]ColumnInfo, error) {
 	q := "SHOW FULL COLUMNS FROM " + quoteIdent(database) + "." + quoteIdent(table)
 	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
-		return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "show full columns: %v", err)
+		return nil, codedError(ErrCodeTableMetadataUnavailable, "show full columns: %v", err)
 	}
 	defer rows.Close()
 
 	cols, err := rows.Columns()
 	if err != nil {
-		return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "columns: %v", err)
+		return nil, codedError(ErrCodeTableMetadataUnavailable, "columns: %v", err)
 	}
-	fieldIdx, keyIdx := -1, -1
-	for i, c := range cols {
-		switch {
-		case strings.EqualFold(c, "Field"):
-			fieldIdx = i
-		case strings.EqualFold(c, "Key"):
-			keyIdx = i
-		}
-	}
-	if fieldIdx < 0 || keyIdx < 0 {
-		return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "unexpected SHOW FULL COLUMNS result")
-	}
-
-	all := map[string]bool{}
-	pks := map[string]bool{}
 	vals := make([]any, len(cols))
 	ptrs := make([]any, len(cols))
 	for i := range vals {
 		ptrs[i] = &vals[i]
 	}
+	var out [][]any
 	for rows.Next() {
 		if err := rows.Scan(ptrs...); err != nil {
-			return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "scan: %v", err)
+			return nil, codedError(ErrCodeTableMetadataUnavailable, "scan: %v", err)
 		}
-		name := valueString(vals[fieldIdx])
-		if name == "" {
-			continue
-		}
-		all[name] = true
-		if strings.EqualFold(valueString(vals[keyIdx]), "PRI") {
-			pks[name] = true
-		}
+		row := make([]any, len(cols))
+		copy(row, vals)
+		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "rows: %v", err)
+		return nil, codedError(ErrCodeTableMetadataUnavailable, "rows: %v", err)
 	}
-	return all, pks, nil
+	return parseColumnRows(cols, out), nil
 }
 
-// valueString 把 database/sql 扫出的值转成字符串（nil → ""）
-func valueString(v any) string {
-	if v == nil {
-		return ""
+// parseColumnRows 把 SHOW FULL COLUMNS 的行转换成 ColumnInfo（纯函数，便于单测）。
+// Default 必须保留 SQL NULL 与空字符串的区别：nil → nil；” → 指向空串的指针。
+func parseColumnRows(cols []string, rows [][]any) []ColumnInfo {
+	idx := func(name string) int {
+		for i, c := range cols {
+			if strings.EqualFold(c, name) {
+				return i
+			}
+		}
+		return -1
 	}
-	return formatValue(v)
+	fieldIdx := idx("Field")
+	typeIdx := idx("Type")
+	nullIdx := idx("Null")
+	keyIdx := idx("Key")
+	defIdx := idx("Default")
+	extraIdx := idx("Extra")
+	commentIdx := idx("Comment")
+
+	out := make([]ColumnInfo, 0, len(rows))
+	for _, row := range rows {
+		get := func(i int) string {
+			if i < 0 || i >= len(row) || row[i] == nil {
+				return ""
+			}
+			return formatValue(row[i])
+		}
+		ci := ColumnInfo{
+			Field:   get(fieldIdx),
+			Type:    get(typeIdx),
+			Null:    get(nullIdx),
+			Key:     get(keyIdx),
+			Extra:   get(extraIdx),
+			Comment: get(commentIdx),
+		}
+		if defIdx >= 0 && defIdx < len(row) && row[defIdx] != nil {
+			d := formatValue(row[defIdx])
+			ci.Default = &d
+		}
+		if ci.Field == "" {
+			continue
+		}
+		out = append(out, ci)
+	}
+	return out
+}
+
+// loadTableColumns 通过 SHOW FULL COLUMNS 读取全部列与主键列（Key == 'PRI'）。
+// 必须在任何 UPDATE 执行前调用：没有主键信息就无法保证 WHERE 只命中一行。
+func loadTableColumns(ctx context.Context, db *sql.DB, database, table string) (map[string]bool, map[string]bool, error) {
+	cols, err := queryFullColumns(ctx, db, database, table)
+	if err != nil {
+		return nil, nil, err
+	}
+	all := map[string]bool{}
+	pks := map[string]bool{}
+	for _, c := range cols {
+		all[c.Field] = true
+		if strings.EqualFold(c.Key, "PRI") {
+			pks[c.Field] = true
+		}
+	}
+	return all, pks, nil
 }
 
 // applyRowUpdates 在同一事务内执行全部 UPDATE。
@@ -680,49 +718,9 @@ func (m *Manager) DescribeTable(c store.DBConn, password, database, table string
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	q := "DESCRIBE " + quoteIdent(database) + "." + quoteIdent(table)
-	rows, err := db.QueryContext(ctx, q)
-	if err != nil {
-		return nil, fmt.Errorf("describe: %w", err)
-	}
-	defer rows.Close()
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-	var out []ColumnInfo
-	vals := make([]any, len(cols))
-	ptrs := make([]any, len(cols))
-	for i := range vals {
-		ptrs[i] = &vals[i]
-	}
-	for rows.Next() {
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, err
-		}
-		get := func(name string) string {
-			for i, col := range cols {
-				if strings.EqualFold(col, name) {
-					if vals[i] == nil {
-						return ""
-					}
-					return formatValue(vals[i])
-				}
-			}
-			return ""
-		}
-		ci := ColumnInfo{
-			Field: get("Field"), Type: get("Type"), Null: get("Null"),
-			Key: get("Key"), Extra: get("Extra"), Comment: get("Comment"),
-		}
-		if d := get("Default"); strings.EqualFold(ci.Null, "YES") && d == "" {
-			ci.Default = nil
-		} else {
-			ci.Default = &d
-		}
-		out = append(out, ci)
-	}
-	return out, rows.Err()
+	// SHOW FULL COLUMNS 是 DESCRIBE 的直接替代，额外返回 Comment；
+	// 列面板的注释搜索/提示必须依赖它（DESCRIBE 没有 Comment 列）。
+	return queryFullColumns(ctx, db, database, table)
 }
 
 // TableMeta 表基本信息（HeidiSQL「基本」标签）

@@ -98,6 +98,18 @@ export function DeleteSnippet(arg1) {
   return window['go']['app']['Service']['DeleteSnippet'](arg1);
 }
 
+export function DeleteGridPrefsByPrefix(arg1) {
+  return window['go']['app']['Service']['DeleteGridPrefsByPrefix'](arg1);
+}
+
+export function GetGridPref(arg1) {
+  return window['go']['app']['Service']['GetGridPref'](arg1);
+}
+
+export function SetGridPref(arg1, arg2) {
+  return window['go']['app']['Service']['SetGridPref'](arg1, arg2);
+}
+
 export function FinishRemoteEdit(arg1) {
   return window['go']['app']['Service']['FinishRemoteEdit'](arg1);
 }

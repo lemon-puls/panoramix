@@ -55,6 +55,12 @@ export function DeleteHostSecret(arg1:string,arg2:string):Promise<void>;
 
 export function DeleteSnippet(arg1:string):Promise<void>;
 
+export function DeleteGridPrefsByPrefix(arg1:string):Promise<void>;
+
+export function GetGridPref(arg1:string):Promise<string>;
+
+export function SetGridPref(arg1:string,arg2:string):Promise<void>;
+
 export function FinishRemoteEdit(arg1:string):Promise<void>;
 
 export function GetTransferSpeedLimit():Promise<number>;

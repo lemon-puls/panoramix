@@ -33,6 +33,7 @@ let lastAICanceled = false
 }
 
 // mock go 绑定：仅 preview 用（FilePanel 依赖本地/远程列目录与传输列表）
+const previewGridPrefs = new Map<string, string>()
 const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   LocalHome: async () => '/home/demo',
   LocalRoots: async () => ['C:\\', 'D:\\'],
@@ -272,6 +273,18 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   SaveDBConn: async () => ({}),
   DeleteDBConn: async () => undefined,
   TestDBConn: async () => undefined,
+  // 列可见性偏好：预览页用内存 Map 模拟 settings 表（支持刷新页内验证）
+  GetGridPref: async (key: string) => previewGridPrefs.get(key) ?? '',
+  SetGridPref: async (key: string, value: string) => {
+    previewGridPrefs.set(key, value)
+    return undefined
+  },
+  DeleteGridPrefsByPrefix: async (prefix: string) => {
+    for (const key of [...previewGridPrefs.keys()]) {
+      if (key.startsWith(prefix)) previewGridPrefs.delete(key)
+    }
+    return undefined
+  },
   ListRemoteEdits: async () => [],
   SftpMkdir: async () => undefined,
   SftpRemove: async () => undefined,

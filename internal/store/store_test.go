@@ -137,3 +137,30 @@ func TestSnippetAndSetting(t *testing.T) {
 		t.Fatalf("setting round-trip failed: v=%q ok=%v err=%v", v, ok, err)
 	}
 }
+
+func TestDeleteSettingsByPrefix(t *testing.T) {
+	s := openTestStore(t)
+	for _, kv := range [][2]string{
+		{"grid.columns.conn-1:db:users", `{"v":1,"hidden":["avatar"]}`},
+		{"grid.columns.conn-1:db:orders", `{"v":1,"hidden":[]}`},
+		{"grid.columns.conn-2:db:users", `{"v":1,"hidden":["id"]}`},
+		{"theme", "dark"},
+	} {
+		if err := s.SetSetting(kv[0], kv[1]); err != nil {
+			t.Fatalf("set %s: %v", kv[0], err)
+		}
+	}
+	if err := s.DeleteSettingsByPrefix("grid.columns.conn-1:"); err != nil {
+		t.Fatalf("delete prefix: %v", err)
+	}
+	for _, key := range []string{"grid.columns.conn-1:db:users", "grid.columns.conn-1:db:orders"} {
+		if _, ok, _ := s.GetSetting(key); ok {
+			t.Fatalf("%s should be deleted", key)
+		}
+	}
+	for _, key := range []string{"grid.columns.conn-2:db:users", "theme"} {
+		if _, ok, _ := s.GetSetting(key); !ok {
+			t.Fatalf("%s should be kept", key)
+		}
+	}
+}
