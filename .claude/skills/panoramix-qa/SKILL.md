@@ -162,3 +162,93 @@ window.go.app.Service.DBQuery = async () => { window.__dbq++; ... };
 `--remote-debugging-port=9223` 在本机常已被用户自己的 Chrome 占用，
 误连会看到无关标签页。务必用独立端口 + 独立 `--user-data-dir`，
 验收结束 `pkill -f <自己的 profile 名>` 清理。
+
+## 七、v0.3.2 PR0（参数化写入 + 待提交保护）验收手法
+
+### 7.1 真实 MySQL 集成测试
+
+本机 3306 可能没有可用凭据（不要猜密码，分类器会拦截）。用 Docker 起独立实例：
+
+```bash
+# 本机 registry mirror 可能是 docker.1ms.run；library/mysql:8.4 已验证可用
+docker pull docker.1ms.run/library/mysql:8.4
+docker run -d --name panoramix-qa-mysql \
+  -e MYSQL_ROOT_PASSWORD=qa_pass -e MYSQL_DATABASE=qa \
+  -p 13306:3306 docker.1ms.run/library/mysql:8.4
+```
+
+在 `internal/db/` 写临时 `qa_*_integration_test.go`（验收后删除），用环境变量门控：
+
+```bash
+QA_MYSQL_ADDR=127.0.0.1:13306 QA_MYSQL_PASS=qa_pass \
+  go test ./internal/db -run TestQARealMySQL -count=1 -v
+```
+
+必须覆盖：`C:\temp\new` / `C:\\` / `C:\` 读回、单双引号、中文、emoji、NUL、
+空串 vs NULL、NULL 主键 `IS NULL`、复合主键、bigint >2^53、第二条失败整批回滚。
+Dolt 镜像可作备胎，但默认只允许 `root@localhost`：加 `-e DOLT_ROOT_HOST='%'`。
+
+### 7.2 参数化写入的「伪造请求」测试（易漏）
+
+只测正常前端路径不够。后端必须自己校验 `PK 集合 == 全部 PRI 列`。测法：
+建复合主键表，只传其中一列，若返回成功且多行被改，即数据安全阻塞缺陷。
+v0.3.2 PR0 实测该缺陷成立（`DBUpdateRows` 无 `SHOW FULL COLUMNS` 校验）。
+
+### 7.3 预览页的组件注册坑
+
+- `DBView.vue` 模板用了 `<n-select>` 但只导入了 `NButton/NInput/NInputNumber`，
+  页大小下拉框会渲染成未解析的 `<N-SELECT>` 自定义元素。判断方法：
+  `document.querySelector('.toolbar > n-select')` 有标签但无 `.n-base-selection`。
+  要验证 `changePageSize` 的保护逻辑，可走 Vue 内部：
+  ```js
+  const s = document.querySelector('.db-view').__vueParentComponent.setupState
+  s.changePageSize(s.activeTab, 100)   // 直接触发 handler + 弹窗
+  ```
+- 读内部状态同样用 `setupState`（`tabs.find(t=>t.kind==='data')`），比猜 DOM 稳。
+
+### 7.4 保护弹窗断言
+
+- 保护弹窗按钮（v0.3.2 PR0）：`取消` / `继续（丢失修改）`；设计期望三按钮，
+  断言 `buttons.includes('应用') === false` 可直接抓出「应用并继续」缺失。
+- Naive UI 弹窗 leave 过渡不结束，节点会 `opacity:0` 残留。只选
+  `getComputedStyle(d).opacity > 0 && d.getClientRects().length > 0` 的弹窗。
+- 弹窗按钮列表里常有一个空文本按钮（关闭图标），断言前 `.filter(Boolean)`。
+- AI 首次发送确认按钮文案是 **`确认发送`**，不是 `发送`。
+
+### 7.5 保护入口测试矩阵（每条都要先造 pending）
+
+| 入口 | 取消后必查 |
+| --- | --- |
+| 刷新 / 筛选回车 / 排序 / 翻页 / 页大小 | pending 保留、页码/排序/pageSize 不变 |
+| 切表（单击结构 / 双击数据） | 数据标签 table 不变、active 不变、pending 保留 |
+| 切连接（MySQL↔Redis） | activeId 不变、标签保留、Redis 未进入 |
+| 切视图（数据库↔终端） | `db-view` 仍在、pending 保留 |
+| 关标签 | 数据标签 pinned 无 ×；解除 pinned 后 `canCloseTab=true` |
+| 结构标签 DDL | **必须**先 pending 弹窗；只出现 DDL 预览即缺陷 |
+
+### 7.6 既有坑（v0.3.2 实测，别误判为本分支引入）
+
+- Redis 选中 key 后右侧 workspace 为空（模板没有 Redis 值查看分支）；
+  `main`/`feat/v0.3-database` 同样存在。
+- 页大小 `<n-select>` 未注册（见 7.3），跨分支存在。
+- CDP 端口 9333 常被其他 QA 会话占用：启动失败会打印
+  `Cannot start http server for devtools`。换 9444/9445，并用
+  `Get-CimInstance Win32_Process` 确认 `--user-data-dir` 是自己的再操作；
+  清理用 `taskkill /PID <pid> /T /F` + Windows `cmd /c rmdir /s /q`。
+
+### 7.7 v0.3.2 PR0 复审手法（2026-11-05）
+
+- 三按钮弹窗用 `dialog.create` + 自定义 `action` 渲染；断言按钮文本为
+  `取消 / 丢弃并继续 / 应用并继续`，不能只数 2 个。
+- 「应用并继续」要分别验证：请求值原样、写后清 pending、随后原操作继续
+  （刷新则 `__dbQueries` 增长；切表则 data tab 变化）。
+- 失败路径用预览 mock `window.__dbUpdateFail = true`：断言原操作中止、
+  pending 保留、目标表未查询、错误码可见。
+- 写入冻结：`setupState.tabs.find(t=>t.kind==='data').loading = true` 后
+  **等一个 Vue tick 再读** `button.disabled`，立刻读会得到 false（假失败）。
+- DDL 保护的三个入口都要测：单击表打开结构、结构标签点 DDL、
+  结构标签执行删列/ALTER；取消后分别断言 active tab、structView、pending。
+- 「应用成功但重查失败」可用覆写 `DBQuery` 在 apply 后抛错复现；
+  检查页面是否出现「修改已应用；查询失败」提示，而不是只看 toast。
+- 复审不要只看提交说明：错误码名（`too_many_edits` vs `too_many_updates`）
+  与设计文档逐字对齐；前端是否真的按 code 映射 i18n 也要单独 grep。
