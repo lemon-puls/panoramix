@@ -179,4 +179,6 @@ description: Panoramix 工程实现技能包。包含技术栈、架构约束与
 - 根因：`/mnt/d`（Windows 盘）上 npm 失败留下的目录项在 DrvFs 中状态不一致
 - 解法：`npm pack` 下载后 tar 解包，放到包内私有
   `node_modules/rollup/node_modules/@rollup/rollup-linux-x64-gnu`（Node 解析优先命中）；
-  esbuild 同理放 `node_modules/esbuild/node_modules/@esbuild/linux-x64`
+  esbuild 同理放 `node_modules/esbuild/node_modules/@esbuild/linux-x64`。
+  若随后 `npm i` 仍要重建顶层同名目录：先 `mkdir <临时名>` 再 `rename` 成目标名，
+  可绕过 DrvFs 的幽灵目录项；顶层目录建好后再跑 `npm i`
