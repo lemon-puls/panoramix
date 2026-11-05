@@ -74,6 +74,10 @@ export function DBTableMeta(arg1, arg2, arg3) {
   return window['go']['app']['Service']['DBTableMeta'](arg1, arg2, arg3);
 }
 
+export function DBUpdateRows(arg1, arg2, arg3, arg4) {
+  return window['go']['app']['Service']['DBUpdateRows'](arg1, arg2, arg3, arg4);
+}
+
 export function DeleteDBConn(arg1) {
   return window['go']['app']['Service']['DeleteDBConn'](arg1);
 }

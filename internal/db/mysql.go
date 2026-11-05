@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -327,6 +328,132 @@ func (m *Manager) Query(c store.DBConn, password, sqlText string, limit int) (*R
 // quoteIdent 反引号转义标识符（库名/表名），防止语法错误与注入
 func quoteIdent(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+}
+
+// ---------- 数据标签单元格写入（参数化 + 事务） ----------
+
+// RowUpdate 一行更新：PK 用于主键定位，Set 为要写入的列。
+// map 的 value 为 nil 表示 SQL NULL。所有值都通过占位符传递，
+// 不在 Go 侧拼接字符串字面量 —— 反斜杠/单引号/Unicode/NUL 均不会被解释。
+type RowUpdate struct {
+	PK  map[string]*string `json:"pk"`
+	Set map[string]*string `json:"set"`
+}
+
+// maxRowUpdates 单次批量更新上限，避免一次请求锁住长事务
+const maxRowUpdates = 1000
+
+// buildRowUpdateSQL 生成参数化的 UPDATE 语句与参数。
+// 库名/表名/列名全部反引号转义；值（包括主键值）全部走 `?` 占位符。
+// 主键值为 nil 时使用 `IS NULL`：MySQL 中 `col = NULL` 永不匹配。
+func buildRowUpdateSQL(database, table string, u RowUpdate) (string, []any, error) {
+	database = strings.TrimSpace(database)
+	table = strings.TrimSpace(table)
+	if database == "" || table == "" {
+		return "", nil, fmt.Errorf("database and table are required")
+	}
+	if len(u.Set) == 0 {
+		return "", nil, fmt.Errorf("no columns to update")
+	}
+	if len(u.PK) == 0 {
+		return "", nil, fmt.Errorf("primary key is required")
+	}
+
+	// map 遍历顺序随机；排序列名让生成 SQL 稳定、可断言、便于日志排查
+	setCols := make([]string, 0, len(u.Set))
+	for col := range u.Set {
+		setCols = append(setCols, col)
+	}
+	sort.Strings(setCols)
+	pkCols := make([]string, 0, len(u.PK))
+	for col := range u.PK {
+		pkCols = append(pkCols, col)
+	}
+	sort.Strings(pkCols)
+
+	var b strings.Builder
+	args := make([]any, 0, len(setCols)+len(pkCols))
+	b.WriteString("UPDATE ")
+	b.WriteString(quoteIdent(database))
+	b.WriteByte('.')
+	b.WriteString(quoteIdent(table))
+	b.WriteString(" SET ")
+	for i, col := range setCols {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(quoteIdent(col))
+		b.WriteString(" = ?")
+		args = append(args, nullableArg(u.Set[col]))
+	}
+	b.WriteString(" WHERE ")
+	for i, col := range pkCols {
+		if i > 0 {
+			b.WriteString(" AND ")
+		}
+		b.WriteString(quoteIdent(col))
+		if v := u.PK[col]; v == nil {
+			b.WriteString(" IS NULL")
+		} else {
+			b.WriteString(" = ?")
+			args = append(args, *v)
+		}
+	}
+	return b.String(), args, nil
+}
+
+// nullableArg 把 *string 转成数据库参数：nil → SQL NULL
+func nullableArg(v *string) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+// applyRowUpdates 在同一事务内执行全部 UPDATE。
+// 任一语句失败即回滚并返回 (0, err)：绝不留下"部分行已写入"的状态。
+// 返回值为实际执行的 UPDATE 语句数（每行一条）。
+func applyRowUpdates(ctx context.Context, db *sql.DB, database, table string, updates []RowUpdate) (int64, error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	// 提交成功后 Rollback 返回 ErrTxDone，忽略即可
+	defer func() { _ = tx.Rollback() }()
+
+	var applied int64
+	for i, u := range updates {
+		stmt, args, err := buildRowUpdateSQL(database, table, u)
+		if err != nil {
+			return 0, fmt.Errorf("update #%d: %w", i+1, err)
+		}
+		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+			return 0, fmt.Errorf("update #%d: %w", i+1, err)
+		}
+		applied++
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+	return applied, nil
+}
+
+// UpdateRows 按主键批量更新单元格。整批放在一个事务内：
+// 任一语句失败则全部回滚，前端不会看到"应用了 X/Y"的中间状态。
+func (m *Manager) UpdateRows(c store.DBConn, password, database, table string, updates []RowUpdate) (int64, error) {
+	if len(updates) == 0 {
+		return 0, nil
+	}
+	if len(updates) > maxRowUpdates {
+		return 0, fmt.Errorf("too many row updates: %d (max %d)", len(updates), maxRowUpdates)
+	}
+	db, err := m.Open(c, password)
+	if err != nil {
+		return 0, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return applyRowUpdates(ctx, db, database, table, updates)
 }
 
 // ListDatabases 列出全部数据库（SHOW DATABASES，按名称排序）

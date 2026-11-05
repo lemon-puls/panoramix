@@ -43,6 +43,8 @@ export function DBShowCreateTable(arg1:string,arg2:string,arg3:string):Promise<s
 
 export function DBTableMeta(arg1:string,arg2:string,arg3:string):Promise<db.TableMeta>;
 
+export function DBUpdateRows(arg1:string,arg2:string,arg3:string,arg4:Array<db.RowUpdate>):Promise<number>;
+
 export function DeleteDBConn(arg1:string):Promise<void>;
 
 export function DeleteGroup(arg1:string):Promise<void>;

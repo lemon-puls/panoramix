@@ -914,6 +914,27 @@ func (s *Service) DBQuery(id, sqlText string, limit int) (*db.Result, error) {
 	return res, nil
 }
 
+// DBUpdateRows 按主键批量更新数据标签的未提交修改。
+// 前端只传结构化的主键与列值；SQL 由 Go 侧参数化生成，整批放在一个事务内，
+// 任一语句失败即全部回滚。日志只记录表名/行数与脱敏后的错误，不记录值。
+func (s *Service) DBUpdateRows(id, database, table string, updates []db.RowUpdate) (int64, error) {
+	if s.dbmgr == nil {
+		return 0, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return 0, err
+	}
+	applied, uerr := s.dbmgr.UpdateRows(c, pw, database, table, updates)
+	if uerr != nil {
+		log.Printf("[app] db update rows failed: table=%s rows=%d err=%s",
+			table, len(updates), redactSQLError(uerr))
+		return 0, uerr
+	}
+	log.Printf("[app] db update rows ok: table=%s rows=%d", table, len(updates))
+	return applied, nil
+}
+
 // DBListDatabases 列出数据库（MySQL）
 func (s *Service) DBListDatabases(id string) ([]string, error) {
 	if s.dbmgr == nil {

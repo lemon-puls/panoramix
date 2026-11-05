@@ -514,6 +514,20 @@ export namespace db {
 	        this.onDelete = source["onDelete"];
 	    }
 	}
+	export class RowUpdate {
+	    pk: { [key: string]: string | null };
+	    set: { [key: string]: string | null };
+
+	    static createFrom(source: any = {}) {
+	        return new RowUpdate(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pk = source["pk"];
+	        this.set = source["set"];
+	    }
+	}
 	export class IndexInfo {
 	    name: string;
 	    type: string;

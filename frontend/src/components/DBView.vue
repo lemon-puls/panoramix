@@ -12,6 +12,7 @@ import {
   DBQuery,
   DBShowCreateTable,
   DBTableMeta,
+  DBUpdateRows,
   DeleteDBConn,
   ListDBConns,
   RedisDeleteKey,
@@ -448,11 +449,9 @@ function pendingValue(tab: WorkTab, row: number, col: number): string | null {
   return p ? p.value : null
 }
 
-// 生成 UPDATE 并执行（按主键定位行；NULL 用字面量 NULL）
-function sqlLiteral(v: string): string {
-  return v === 'NULL' ? 'NULL' : `'${v.replace(/'/g, "''")}'`
-}
-
+// 生成参数化更新请求并交给后端执行。
+// 值不再拼进 SQL：反斜杠、单引号、NUL、emoji 都由数据库驱动按参数处理。
+// 约定：输入大写的 NULL 表示置空（与 i18n 提示一致），其余按字面量写入。
 async function applyEdits(tab: WorkTab) {
   if (!tab.result || tab.pending.length === 0) return
   const columns = tab.result.columns
@@ -465,38 +464,37 @@ async function applyEdits(tab: WorkTab) {
     return
   }
 
-  // 按行分组生成 UPDATE
+  // 按行分组：一行多列合并为一条 UPDATE（后端在单事务内执行）
   const byRow = new Map<number, { row: number; col: number; value: string }[]>()
   for (const p of tab.pending) {
     const list = byRow.get(p.row) ?? []
     list.push(p)
     byRow.set(p.row, list)
   }
-  const table = `${quoteIdent(tab.database)}.${quoteIdent(tab.table)}`
-  const statements: string[] = []
+  const updates: models.db.RowUpdate[] = []
   for (const [rowIdx, edits] of byRow) {
     const rowData = rows[rowIdx]
     if (!rowData) continue
-    const setClause = edits
-      .map((e) => `${quoteIdent(columns[e.col])} = ${sqlLiteral(e.value)}`)
-      .join(', ')
-    const whereClause = tab.pkColumns
-      .map((name) => {
-        const v = rowData[idxOf(name)]
-        return `${quoteIdent(name)} = ${v === null ? 'NULL' : `'${v.replace(/'/g, "''")}'`}`
-      })
-      .join(' AND ')
-    statements.push(`UPDATE ${table} SET ${setClause} WHERE ${whereClause} LIMIT 1;`)
+    const pk: Record<string, string | null> = {}
+    for (const name of tab.pkColumns) pk[name] = rowData[idxOf(name)] ?? null
+    const set: Record<string, string | null> = {}
+    for (const e of edits) {
+      const col = columns[e.col]
+      if (!col) continue
+      set[col] = e.value === 'NULL' ? null : e.value
+    }
+    if (Object.keys(set).length === 0) continue
+    updates.push({ pk, set })
   }
+  if (updates.length === 0) return
 
   tab.loading = true
   try {
-    for (const sql of statements) {
-      await DBQuery(tab.connId, sql, 1)
-    }
-    message.success(t('db.editsApplied', { n: statements.length }))
+    const applied = await DBUpdateRows(tab.connId, tab.database, tab.table, updates)
+    message.success(t('db.editsApplied', { n: applied }))
     await loadTableData(tab)
   } catch (e) {
+    // 后端整批事务失败即回滚，pending 保留，用户可以修正后重试
     message.error(String(e))
   } finally {
     tab.loading = false
