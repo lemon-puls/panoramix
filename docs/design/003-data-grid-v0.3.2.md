@@ -241,18 +241,22 @@
 
 #### 3.2.4 持久化
 
-- 键：`panoramix.db.columns.v1:{connId}:{encodeURIComponent(database)}:{encodeURIComponent(table)}`
+> 实现更新（v1.2）：按本轮协调者指令落在 `settings` 表，而不是 localStorage。
+> 纯函数（key 编码、解析、求交、修复）仍在 `gridPrefs.ts`，读写通过绑定完成。
+
+- 键：`grid.columns.<connId>.<database>.<table>`（settings 表）
 - 值：`{ "v": 1, "hidden": ["avatar", "profile_json"] }`，只存列名，不存顺序。
 - 读取时机：打开数据标签、切换表、应用后。写入时机：列面板应用、列头隐藏。
+  读取 `GetGridPref`、写入 `SetGridPref`、删除 `DeleteGridPrefsByPrefix`。
 - 恢复语义：
   - 切换结构标签/数据标签：保留（标签对象仍在内存，且按表读取）。
   - 切换到另一张表再切回：各自恢复。
   - 重启应用后重新打开该表：恢复。
   - 同一表的两个连接：互不影响。
 - 列被删除/重命名：读取时取 `hidden ∩ result.columns`；未知列名忽略但保留在存储中（改名回来后仍生效）。应用时重写为当前有效集合。
-- 存储损坏/版本不匹配/localStorage 不可用：当作“无隐藏”，不报错。
-- 删除连接时：清理该 `connId` 前缀的所有列偏好键。
-- 隐藏后若当前可见列为 0（手工改 localStorage 或列被删）：自动显示第一列并回写修复后的集合。
+- 存储损坏/版本不匹配/设置读取失败：当作“无隐藏”，不报错。
+- 删除连接时：`DeleteDBConn` 按 `grid.columns.<connId>.` 前缀清理。
+- 隐藏后若当前可见列为 0（手工改 settings 值或列被删）：自动显示第一列并回写修复后的集合。
 
 #### 3.2.5 与结构标签的关系
 
@@ -669,26 +673,27 @@ interface DataTabState {
 实现建议：
 
 - 不要让 `conditionsDraft` 与 `conditions` 共享数组引用；用结构化克隆。
-- `hiddenColumns` 的真相在 localStorage；tab 内是缓存，切换表时重读。
+- `hiddenColumns` 的真相在 settings 表（`grid.columns.<connId>.<db>.<table>`）；tab 内是缓存，切换表时重读。
 - 行/列索引：见 §3.2.6；隐藏列不改变 `result.rows` 与原始列索引。
 - **切表重置清单**（按评审补充，漏一项就会串表）：`conditions / conditionsDraft / rawWhere / rawWhereDraft / rawPrefill / conditionsSnapshot / filterDirty / filterPanelOpen / columnsPanelOpen / lastTableSQL / filterError / columnsStale / metadataError / hiddenColumns`；`pending / editing / result / page / sortCol` 由加载流程处理；`filterMode` 按 §3.3.1 在会话内保留。
 - pending 编辑项在 UI 层沿用既有「大写 `NULL` 表示置空」的输入约定；构造 `RowUpdate` 时转成 `value: string | null`（null = SQL NULL），**哨兵不进入绑定参数**。字面量大写 `"NULL"` 本轮仍无法与置空区分（既有约定，不在本轮改）；需要写该字符串时用查询标签。该转换随 PR0 一起做。
 
-### 4.2 本地持久化
+### 4.2 本地持久化（settings 表）
 
 只持久化列可见性：
 
 ```
-key   = `panoramix.db.columns.v1:${connId}:${encodeURIComponent(database)}:${encodeURIComponent(table)}`
+key   = `grid.columns.${connId}.${database}.${table}`
 value = { "v": 1, "hidden": string[] }
 ```
 
-- 读取失败（JSON 解析、版本不符、quota/隐私模式）→ 返回空数组，不抛错。
+- 绑定：`GetGridPref(key)` / `SetGridPref(key, value)` / `DeleteGridPrefsByPrefix(prefix)`；
+  底层是既有 `settings` 表（非敏感 UI 状态）。
+- 读取失败（JSON 解析、版本不符、设置读取失败）→ 返回空数组，不抛错。
 - 写入失败 → 静默忽略（本次会话仍生效）。
-- 删除连接时在 `askDelete` 里按 `connId` 前缀清理；不在数据库端存任何偏好。
+- 删除连接时由 `DeleteDBConn` 按 `grid.columns.<connId>.` 前缀清理；不在数据库端存任何偏好。
 - 应用内表改名/删除时清理旧 key；孤儿 key 不影响功能，但会积累。
-- 集中读写：所有 key 编码、版本检查、求交、损坏修复都放在 `gridPrefs.ts`，`DBView.vue` 不直接调 `localStorage`。
-- 已知降级（写进 tooltip/文档，不当强承诺）：Wails 开发态与生产态 origin 不同，偏好不互通；WebView 数据被清空或隐私模式会让偏好丢失。
+- 集中读写：所有 key 编码、版本检查、求交、损坏修复都放在 `gridPrefs.ts`，`DBView.vue` 不直接拼 key 或调用存储绑定。
 - 不持久化：筛选条件、筛选模式、高级 WHERE、页码、排序、页大小（页大小仍按现有行为在本次会话内保留）。
 
 ### 4.3 Go 类型与绑定
@@ -930,7 +935,7 @@ func (s *Service) DBUpdateRows(connID, database, table string, updates []db.RowU
 - `frontend/src/components/GridFilterPanel.vue`：条件行、操作符/值、SQL 预览、模式切换、应用。
 - `frontend/src/components/GridColumnsPanel.vue`：搜索、勾选、全选/清空、应用。
 - `frontend/src/components/GridFilterChips.vue`：已应用条件 chip、清除全部、+ 条件。
-- `frontend/src/stores/gridPrefs.ts`：localStorage 读写与 key 编码（纯函数，便于测试）。
+- `frontend/src/stores/gridPrefs.ts`：settings 偏好的 key 编码/解析/求交/修复（纯函数，便于测试）。
 - `frontend/src/stores/gridEdits.ts`（可选）：把 pending 编辑 → `RowUpdate` 的转换抽成纯函数，便于测试隐藏列/复合主键/NULL。
 
 修改：
@@ -939,7 +944,7 @@ func (s *Service) DBUpdateRows(connID, database, table string, updates []db.RowU
 - `internal/db/mysql.go`（已落地 `RowUpdate` / `UpdateRows`）+ 新增 `internal/db/table_query.go`：builder + 校验 + 错误码；`DescribeTable` 改 `SHOW FULL COLUMNS` 与纯函数解析。
 - `internal/app/service.go`：三个绑定方法（`DBTableData`、`DBPreviewTableSQL`、`DBUpdateRows`），错误码包装与日志脱敏。
 - `frontend/src/i18n/zh-CN.ts` / `en-US.ts`：`db.filter.*`、`db.columns.*`、`db.cell.*`、`db.pendingGuard.*`、`db.err.*`、`db.gridHint`（数据标签专用提示，不动查询标签的 `db.clickSort`）。
-- `ARCHITECTURE.md`：新文件、三个绑定方法、localStorage 偏好、无新事件；`ROADMAP.md` 在落地时勾选。
+- `ARCHITECTURE.md`：新文件、三个绑定方法、settings 偏好、无新事件；`ROADMAP.md` 在落地时勾选。
 - `frontend/package.json`：加入最小 `vitest` 配置（至少跑 `gridPrefs`、数字正则、pending→RowUpdate 转换）。评审指出“纯函数便于测试”在没有测试框架时是空话；不引入组件级测试。
 
 **PR 拆分（每个可独立验收；保护先行）：**
@@ -1039,7 +1044,7 @@ func (s *Service) DBUpdateRows(connID, database, table string, updates []db.RowU
 | 31 | 快捷筛选 NULL | 只提供 IS NULL / IS NOT NULL。 |
 | 32 | 快捷筛选超长值（>4096） | 禁用并提示手动输入。 |
 | 33 | 列面板搜索无结果 | 「没有匹配的列」；全选/清空无操作。 |
-| 34 | localStorage 损坏/不可用 | 当作无隐藏；不报错；本次会话仍可改。 |
+| 34 | settings 值损坏/不可用 | 当作无隐藏；不报错；本次会话仍可改。 |
 | 35 | 多连接同表 | 列偏好按 connId 隔离。 |
 | 36 | 结构标签 DDL 改列 | 执行前若同表有 pending 先走保护；标记元数据过期；下次加载移除失效条件并提示。 |
 | 37 | 查询进行中继续改条件 | 草稿可改；应用按钮与 chip × 禁用（单飞）；旧响应不能改 loading/error。 |
@@ -1149,7 +1154,7 @@ SELECT id, email, status, created_at FROM grid_qa;
 - [ ] 隐藏列上有待提交编辑：工具栏显示 `⚠ N 处位于隐藏列`；点批量应用后数据库值更新。
 - [ ] CSV 只包含可见列，且只包含当前页；与屏幕列顺序一致；按钮写「CSV（可见列）」，导出后 toast「已导出 N 列，隐藏 M 列」。
 - [ ] Redis 连接不显示「筛选」「列」控件。
-- [ ] 手工把 localStorage 中 hidden 设为全部列：重新打开后自动显示第一列并回写修复。
+- [ ] 手工把 settings 中 hidden 设为全部列：重新打开后自动显示第一列并回写修复。
 - [ ] 模拟列元数据加载失败（临时撤权限或断连后重试）：筛选按钮禁用并提示；列面板仍能按列名打开、勾选、应用。
 
 ### 7.3 多条件筛选器
@@ -1196,7 +1201,7 @@ SELECT id, email, status, created_at FROM grid_qa;
 - [ ] 字符串字面量里含 `;` 或 `--`（如 `note = 'a;b--c'`）：视为普通值，允许执行。
 - [ ] 输入顶层 `ORDER BY id`、`GROUP BY status`、`LIMIT 10`、`OFFSET 10`、`UNION SELECT 1`：行内错误，拒绝应用，不发送查询。
 - [ ] 列名恰好为 `order` / `group` 的表：`order = 1`、`group = 1` 能正常应用，不被误判为子句。
-- [ ] 子查询内使用 `LIMIT`（如 `id IN (SELECT id FROM grid_qa LIMIT 5)`）：允许，查询正常。
+- [ ] 子查询经派生表使用 `LIMIT`（如 `id IN (SELECT id FROM (SELECT id FROM grid_qa LIMIT 5) AS t)`）：允许，查询正常。
 - [ ] 高级模式点「预览 SQL」：显示含当前 WHERE 的完整 SELECT（含系统追加的 LIMIT/OFFSET，OFFSET 对应第 1 页）；不执行；可复制/在查询标签打开。
 - [ ] 未修改高级文本点「返回筛选器」：条件快照恢复，不重新查询。
 - [ ] 改过高级文本但**未应用**点「返回筛选器」：确认框文案为「放弃修改，当前筛选不变」；「放弃并返回」恢复条件快照且不查库。
