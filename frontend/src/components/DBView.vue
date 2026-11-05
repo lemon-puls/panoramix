@@ -498,6 +498,13 @@ function currentDataTab(): WorkTab | undefined {
   return tabs.value.find((x) => x.kind === 'data' && x.connId === activeId.value)
 }
 
+// 指定连接/库/表的数据标签（DDL 保护用）
+function dataTabFor(connId: string, database: string, table: string): WorkTab | undefined {
+  return tabs.value.find(
+    (x) => x.kind === 'data' && x.connId === connId && x.database === database && x.table === table,
+  )
+}
+
 function dataTabsWithPending(): WorkTab[] {
   return tabs.value.filter((x) => x.kind === 'data' && x.pending.length > 0)
 }
@@ -789,13 +796,25 @@ function exportCSV(tab: WorkTab) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-async function loadDDL(tab: WorkTab) {
+// 查看 DDL 前保护同表数据标签的 pending：
+// DDL 可能改变列定义，旧的行/列快照之后无法安全应用。
+async function loadDDL(tab: WorkTab): Promise<boolean> {
+  const dataTab = dataTabFor(tab.connId, tab.database, tab.table)
+  if (!(await guardPendingTabs(dataTab ? [dataTab] : []))) return false
   try {
     tab.ddl = await DBShowCreateTable(tab.connId, tab.database, tab.table)
     tab.showDDL = true
+    return true
   } catch (e) {
     message.error(String(e))
+    return false
   }
+}
+
+// 工具栏 / 视图切换按钮：只有 DDL 加载成功（未被用户取消）才切到 DDL 视图
+async function showDDL(tab: WorkTab) {
+  if (!(await loadDDL(tab))) return
+  tab.structView = 'ddl'
 }
 
 // 查询历史
@@ -861,7 +880,10 @@ function buildColumnSQL(
 }
 
 // 执行 DDL：先预览确认，再执行并刷新结构
-function runDDL(tab: WorkTab, sql: string) {
+async function runDDL(tab: WorkTab, sql: string) {
+  // 执行 DDL 前先处理同表数据标签的 pending：列被改/删后旧修改无法应用
+  const dataTab = dataTabFor(tab.connId, tab.database, tab.table)
+  if (!(await guardPendingTabs(dataTab ? [dataTab] : []))) return
   dialog.warning({
     title: t('db.confirmDDL'),
     content: () => h('pre', { class: 'ddl-preview' }, sql),
@@ -1626,7 +1648,7 @@ void load()
               <button
                 class="sub-tab"
                 :class="{ active: activeTab.structView === 'ddl' }"
-                @click="loadDDL(activeTab); activeTab.structView = 'ddl'"
+                @click="showDDL(activeTab)"
               >
                 DDL
               </button>
