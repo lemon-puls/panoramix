@@ -42,6 +42,11 @@ const initialView =
 const mainView = ref<'terminal' | 'db'>(initialView)
 provide('mainView', mainView)
 
+// 视图切换守卫：DBView 挂载时注册（有未提交数据修改时返回 false），
+// AppHeader 切走前 await。DBView 卸载后会自动注销。
+const viewGuard: { fn: (() => Promise<boolean>) | null } = { fn: null }
+provide('viewGuard', viewGuard)
+
 const isDBView = computed(() => mainView.value === 'db')
 
 const renderError = ref('')

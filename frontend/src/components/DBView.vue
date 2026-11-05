@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
 import { NButton, NInput, NInputNumber } from 'naive-ui'
@@ -35,6 +35,8 @@ import AISettingsModal from './AISettingsModal.vue'
 const { t, locale } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
+// App 注入的视图切换守卫：切到终端视图前 await，防止未提交修改随组件卸载丢失
+const viewGuard = inject<{ fn: (() => Promise<boolean>) | null } | null>('viewGuard', null)
 
 const conns = ref<models.store.DBConn[]>([])
 const activeId = ref<string>('')
@@ -71,7 +73,9 @@ async function onSaved() {
   await load()
 }
 
-function askDelete(c: models.store.DBConn) {
+async function askDelete(c: models.store.DBConn) {
+  // 删除当前连接会清空全部标签；先保护未提交修改
+  if (c.id === activeId.value && !(await confirmDiscardPending(pendingCount()))) return
   dialog.warning({
     title: t('tree.deleteTitle'),
     content: t('db.deleteConfirm', { name: c.name }),
@@ -88,6 +92,14 @@ function askDelete(c: models.store.DBConn) {
       }
     },
   })
+}
+
+// 切换连接：watch(activeId) 会清空全部标签，因此必须在这里先确认。
+// 不要在其他地方直接给 activeId 赋值（删除连接/首次加载除外，那两条路径没有 pending）。
+async function selectConn(c: models.store.DBConn) {
+  if (c.id === activeId.value) return
+  if (!(await confirmDiscardPending(pendingCount()))) return
+  activeId.value = c.id
 }
 
 async function testConn(c: models.store.DBConn) {
@@ -147,16 +159,23 @@ async function toggleDb(db: string) {
 }
 
 // 单击表 → 打开结构标签（已存在则激活）
-// 单击表：创建「表」与「数据」两个固定标签，激活「表」，数据同步加载
+// 单击表：创建「表」与「数据」两个固定标签，激活「表」，数据同步加载。
+// 保护在动作入口 await：只有确认后才改标签/表名，取消时界面保持原状。
 async function openTableStructure(db: string, table: models.db.TableInfo) {
+  const prior = currentDataTab()
+  const sameTable = !!prior && prior.database === db && prior.table === table.name
+  // 切到另一张表会丢 pending；同一张表且已有结果时不重载，不打扰用户
+  if (!sameTable && !(await confirmDiscardDataTab(prior))) return
+
   const structTab = ensureStructureTab(db, table.name)
   const dataTab = ensureDataTab(db, table.name)
   activeTabId.value = structTab.id
+  const needLoad = !(dataTab.result && dataTab.database === db && dataTab.table === table.name)
   await Promise.all([
     loadTableStructure(structTab),
-    dataTab.result && dataTab.table === table.name
-      ? Promise.resolve()
-      : loadTableData(dataTab, true),
+    needLoad
+      ? loadTableData(dataTab, true, sameTable ? 'plain' : 'discard')
+      : Promise.resolve(),
   ])
 }
 
@@ -217,11 +236,19 @@ function ensureDataTab(db: string, tableName: string): WorkTab {
     tab.title = t('db.tabData')
     tab.error = ''
     if (changed) {
-      // 切换了表：清空旧结果，等待重新加载
+      // 切换了表：清空旧结果与旧编辑状态，等待重新加载。
+      // pending 的截图已不存在，不能带着旧行索引进入新表；
+      // 调用方必须在此之前完成保护确认（openTableStructure/openTableData 的入口守卫）。
       tab.filter = ''
       tab.sortCol = ''
       tab.page = 0
       tab.result = null
+      tab.pending = []
+      tab.editing = null
+      tab.pkColumns = []
+      tab.gridSortCol = -1
+      tab.selectedRow = -1
+      tab.selectedCol = -1
     }
     return tab
   }
@@ -237,11 +264,13 @@ function ensureDataTab(db: string, tableName: string): WorkTab {
 }
 
 // 双击表 → 激活固定的「数据」标签并加载
+// 双击是显式重查：即使表没变也要先确认未提交修改
 async function openTableData(db: string, table: models.db.TableInfo) {
+  if (!(await confirmDiscardDataTab(currentDataTab()))) return
   ensureStructureTab(db, table.name)
   const tab = ensureDataTab(db, table.name)
   activeTabId.value = tab.id
-  await loadTableData(tab, true)
+  await loadTableData(tab, true, 'discard')
 }
 
 // ---------- 工作标签（HeidiSQL 风格：数据 / 查询 / 结构） ----------
@@ -354,11 +383,13 @@ function sortTabs() {
   tabs.value.sort((a, b) => order[a.kind] - order[b.kind])
 }
 
-function closeTab(id: string) {
+async function closeTab(id: string) {
   const idx = tabs.value.findIndex((x) => x.id === id)
   if (idx === -1) return
   const tab = tabs.value[idx]
   if (!canCloseTab(tab)) return
+  // 数据标签目前固定（pinned）不可关闭；这里仍兜底保护，避免未来放开后静默丢修改
+  if (!(await confirmDiscardDataTab(tab))) return
   tabs.value.splice(idx, 1)
   if (activeTabId.value === id) activeTabId.value = tabs.value.at(-1)?.id ?? ''
 }
@@ -373,7 +404,12 @@ function buildTableSQL(tab: WorkTab): string {
   return parts.join(' ')
 }
 
-async function loadTableData(tab: WorkTab, resetPage = false) {
+async function loadTableData(tab: WorkTab, resetPage = false, intent: LoadIntent = 'plain') {
+  // 单一收口：pending > 0 时普通加载直接拒绝，调用方必须先走确认流程
+  if (intent === 'plain' && tab.pending.length > 0) {
+    console.warn('[db] loadTableData blocked: pending edits require explicit discard intent')
+    return
+  }
   if (resetPage) tab.page = 0
   tab.loading = true
   tab.error = ''
@@ -449,6 +485,63 @@ function pendingValue(tab: WorkTab, row: number, col: number): string | null {
   return p ? p.value : null
 }
 
+// ---------- 待提交编辑保护 ----------
+//
+// 原则：任何会清空 pending 的动作（重查/切表/切连接/关标签/切视图）都必须先确认。
+// loadTableData 只接受显式 intent，普通调用在 pending > 0 时直接拒绝，
+// 防止未来新增入口绕过保护而静默丢数据。
+
+type LoadIntent = 'plain' | 'discard' | 'applied'
+
+// 当前连接的数据标签（全局唯一）
+function currentDataTab(): WorkTab | undefined {
+  return tabs.value.find((x) => x.kind === 'data' && x.connId === activeId.value)
+}
+
+// 当前连接全部数据标签的未提交修改总数
+function pendingCount(): number {
+  return tabs.value.filter((x) => x.kind === 'data').reduce((n, x) => n + x.pending.length, 0)
+}
+
+// 同一时间只允许一个保护弹窗：弹窗期间的重复点击直接拒绝，
+// 避免叠出多个确认框或“第二个动作在用户确认前就执行”。
+let pendingGuardOpen = false
+
+function confirmDiscardPending(n: number): Promise<boolean> {
+  if (n <= 0) return Promise.resolve(true)
+  if (pendingGuardOpen) return Promise.resolve(false)
+  pendingGuardOpen = true
+  return new Promise((resolve) => {
+    let done = false
+    const finish = (v: boolean) => {
+      if (done) return
+      done = true
+      pendingGuardOpen = false
+      resolve(v)
+    }
+    dialog.warning({
+      title: t('db.pendingTitle'),
+      content: t('db.pendingDiscard', { n }),
+      positiveText: t('db.pendingContinue'),
+      negativeText: t('common.cancel'),
+      onPositiveClick: () => finish(true),
+      onNegativeClick: () => finish(false),
+      onClose: () => finish(false),
+    })
+  })
+}
+
+async function confirmDiscardDataTab(tab: WorkTab | null | undefined): Promise<boolean> {
+  if (!tab || tab.pending.length === 0) return true
+  return confirmDiscardPending(tab.pending.length)
+}
+
+// 数据标签重查入口（刷新/筛选/页大小）：先确认，再加载
+async function reloadTableData(tab: WorkTab, resetPage = false): Promise<void> {
+  if (!(await confirmDiscardDataTab(tab))) return
+  await loadTableData(tab, resetPage, 'discard')
+}
+
 // 生成参数化更新请求并交给后端执行。
 // 值不再拼进 SQL：反斜杠、单引号、NUL、emoji 都由数据库驱动按参数处理。
 // 约定：输入大写的 NULL 表示置空（与 i18n 提示一致），其余按字面量写入。
@@ -492,7 +585,8 @@ async function applyEdits(tab: WorkTab) {
   try {
     const applied = await DBUpdateRows(tab.connId, tab.database, tab.table, updates)
     message.success(t('db.editsApplied', { n: applied }))
-    await loadTableData(tab)
+    // 已成功提交，允许重查清空 pending
+    await loadTableData(tab, false, 'applied')
   } catch (e) {
     // 后端整批事务失败即回滚，pending 保留，用户可以修正后重试
     message.error(String(e))
@@ -501,28 +595,41 @@ async function applyEdits(tab: WorkTab) {
   }
 }
 
-function sortTableByColumn(tab: WorkTab, colName: string) {
+async function sortTableByColumn(tab: WorkTab, colName: string) {
+  // 先确认再改排序：取消时排序状态与页码都不变
+  if (!(await confirmDiscardDataTab(tab))) return
   if (tab.sortCol === colName) tab.sortDir = tab.sortDir === 1 ? -1 : 1
   else {
     tab.sortCol = colName
     tab.sortDir = 1
   }
-  void loadTableData(tab, true)
+  void loadTableData(tab, true, 'discard')
 }
 
 function hasNextPage(tab: WorkTab): boolean {
   return (tab.result?.rows?.length ?? 0) >= tab.pageSize
 }
 
-function nextPage(tab: WorkTab) {
+async function nextPage(tab: WorkTab) {
+  if (!(await confirmDiscardDataTab(tab))) return
   tab.page++
-  void loadTableData(tab)
+  void loadTableData(tab, false, 'discard')
 }
 
-function prevPage(tab: WorkTab) {
+async function prevPage(tab: WorkTab) {
   if (tab.page === 0) return
+  if (!(await confirmDiscardDataTab(tab))) return
   tab.page--
-  void loadTableData(tab)
+  void loadTableData(tab, false, 'discard')
+}
+
+// 页大小：先确认再改值；取消时下拉框仍显示原值（:value 绑定）
+async function changePageSize(tab: WorkTab, size: number | null) {
+  if (size == null || size === tab.pageSize) return
+  if (!(await confirmDiscardDataTab(tab))) return
+  tab.pageSize = size
+  tab.page = 0
+  void loadTableData(tab, false, 'discard')
 }
 
 function gotoStructure(tab: WorkTab) {
@@ -1025,7 +1132,13 @@ const typeColors: Record<string, string> = {
 
 // ---------- 连接切换时重置 ----------
 
-watch(activeId, () => {
+// 注意：watch(activeId) 会清空全部标签（包括待提交修改）。
+// 所有用户触发的切换都必须先经过 selectConn() 的确认；
+// 这里再兜底打一条日志，方便发现未来新增的未保护赋值点。
+watch(activeId, (next, prev) => {
+  if (prev && next !== prev && pendingCount() > 0) {
+    console.warn('[db] connection switched while pending edits existed; tabs cleared')
+  }
   databases.value = []
   Object.keys(tablesByDb).forEach((k) => delete tablesByDb[k])
   expandedDbs.value = new Set()
@@ -1059,6 +1172,15 @@ watch(activeId, () => {
   }
 })
 
+// 注册/注销视图切换守卫：切到终端视图会卸载本组件，必须在卸载前确认
+onMounted(() => {
+  if (!viewGuard) return
+  viewGuard.fn = () => confirmDiscardPending(pendingCount())
+})
+onBeforeUnmount(() => {
+  if (viewGuard) viewGuard.fn = null
+})
+
 void load()
 
 </script>
@@ -1078,7 +1200,7 @@ void load()
           :key="c.id"
           class="conn-block"
         >
-          <div class="conn-item" :class="{ active: c.id === activeId }" @click="activeId = c.id">
+          <div class="conn-item" :class="{ active: c.id === activeId }" @click="selectConn(c)">
             <span class="twist" @click.stop="c.id === activeId && !isRedis && toggleConn()">
               {{ c.kind === 'redis' ? '●' : databases.length > 0 && c.id === activeId ? '▾' : '▸' }}
             </span>
@@ -1216,9 +1338,9 @@ void load()
               size="small"
               :placeholder="t('db.filterPlaceholder')"
               class="filter-input"
-              @keyup.enter="loadTableData(activeTab, true)"
+              @keyup.enter="reloadTableData(activeTab, true)"
             />
-            <n-button size="small" :loading="activeTab.loading" @click="loadTableData(activeTab, true)">
+            <n-button size="small" :loading="activeTab.loading" @click="reloadTableData(activeTab, true)">
               {{ t('db.refresh') }}
             </n-button>
             <n-button size="small" @click="gotoStructure(activeTab)">{{ t('db.structureShort') }}</n-button>
@@ -1227,11 +1349,11 @@ void load()
             <span class="page-num">{{ t('db.pageN', { n: activeTab.page + 1 }) }}</span>
             <n-button size="small" :disabled="!hasNextPage(activeTab)" @click="nextPage(activeTab)">›</n-button>
             <n-select
-              v-model:value="activeTab.pageSize"
+              :value="activeTab.pageSize"
               size="small"
               :options="[100, 500, 1000, 5000].map((n) => ({ label: String(n), value: n }))"
               style="width: 90px"
-              @update:value="loadTableData(activeTab, true)"
+              @update:value="changePageSize(activeTab, $event)"
             />
             <n-button size="small" :disabled="!(activeTab.result?.columns?.length)" @click="exportCSV(activeTab)">
               CSV

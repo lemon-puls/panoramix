@@ -87,6 +87,12 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
     { field: 'created_at', type: 'datetime', null: 'YES', key: '', default: 'CURRENT_TIMESTAMP', extra: '', comment: '' },
   ],
   DBShowCreateTable: async () => 'CREATE TABLE `users` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(64) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;',
+  DBTableMeta: async () => ({
+    name: 'users', engine: 'InnoDB', collation: 'utf8mb4_general_ci', comment: '用户表',
+    createTime: '2026-01-01 10:00:00', rows: 1280, dataLength: 0, indexLength: 0, autoIncrement: 1281,
+  }),
+  DBListIndexes: async () => [],
+  DBListForeignKeys: async () => [],
   // AI 预览 mock：不依赖真实模型，用于验证侧栏布局与交互
   AIGetConfig: async () => {
     const params = new URLSearchParams(location.search)
@@ -225,7 +231,28 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   AITestConnection: async () => undefined,
   AIDeleteKey: async () => undefined,
   AIClearConsents: async () => undefined,
-  DBQuery: async () => ({ columns: ['id', 'name', 'created_at'], rows: [['1', 'alice', '2026-01-01 10:00:00'], ['2', null, '2026-01-02 11:30:00']], affected: 0, durationMs: 3, truncated: false }),
+  DBQuery: async (_id: string, sql: string) => {
+    const w = window as any
+    w.__dbQueries = [...(w.__dbQueries ?? []), sql]
+    // ?rows=N 用于验证分页保护（返回恰好 N 行，使“下一页”可用）；默认为小样本
+    const forced = Number(new URLSearchParams(location.search).get('rows') ?? '0')
+    const sample: (string | null)[][] = [
+      ['1', 'alice', '2026-01-01 10:00:00'],
+      ['2', null, '2026-01-02 11:30:00'],
+    ]
+    const rows =
+      forced > sample.length
+        ? Array.from({ length: forced }, (_, i) => [String(i + 1), i === 0 ? 'alice' : null, '2026-01-01 10:00:00'])
+        : sample
+    return { columns: ['id', 'name', 'created_at'], rows, affected: 0, durationMs: 3, truncated: false }
+  },
+  // 参数化更新：preview 直接返回“应用的行数”，不连真实数据库。
+  // 记录调用参数，便于浏览器端验证前端只传结构化 pk/set（不拼 SQL）。
+  DBUpdateRows: async (_id: string, db: string, table: string, updates: any[]) => {
+    const w = window as any
+    w.__dbUpdateCalls = [...(w.__dbUpdateCalls ?? []), { db, table, updates }]
+    return updates?.length ?? 0
+  },
   RedisScanKeys: async () => ({ keys: [
     { key: 'user:1:name', ttl: 120, type: 'string' },
     { key: 'user:1:email', ttl: 120, type: 'string' },

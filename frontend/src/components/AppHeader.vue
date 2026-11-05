@@ -21,8 +21,13 @@ const mainView = inject<Ref<'terminal' | 'db'>>('mainView')
 const isTerminalView = computed(() => mainView?.value === 'terminal')
 const isDBView = computed(() => mainView?.value === 'db')
 
-function switchView(v: 'terminal' | 'db') {
-  if (mainView) mainView.value = v
+// DBView 注册的视图切换守卫：有未提交的数据修改时先确认
+const viewGuard = inject<{ fn: (() => Promise<boolean>) | null } | null>('viewGuard', null)
+
+async function switchView(v: 'terminal' | 'db') {
+  if (!mainView || mainView.value === v) return
+  if (viewGuard?.fn && !(await viewGuard.fn())) return
+  mainView.value = v
 }
 
 const logEnabled = ref(false)
