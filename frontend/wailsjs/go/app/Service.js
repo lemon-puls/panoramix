@@ -74,6 +74,14 @@ export function DBTableMeta(arg1, arg2, arg3) {
   return window['go']['app']['Service']['DBTableMeta'](arg1, arg2, arg3);
 }
 
+export function DBTableData(arg1, arg2) {
+  return window['go']['app']['Service']['DBTableData'](arg1, arg2);
+}
+
+export function DBPreviewTableSQL(arg1, arg2) {
+  return window['go']['app']['Service']['DBPreviewTableSQL'](arg1, arg2);
+}
+
 export function DBUpdateRows(arg1, arg2, arg3, arg4) {
   return window['go']['app']['Service']['DBUpdateRows'](arg1, arg2, arg3, arg4);
 }

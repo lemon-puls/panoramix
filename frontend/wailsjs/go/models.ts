@@ -528,6 +528,116 @@ export namespace db {
 	        this.set = source["set"];
 	    }
 	}
+	export class FilterCondition {
+	    column: string;
+	    op: string;
+	    value: string;
+
+	    static createFrom(source: any = {}) {
+	        return new FilterCondition(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.column = source["column"];
+	        this.op = source["op"];
+	        this.value = source["value"];
+	    }
+	}
+	export class TableQuery {
+	    database: string;
+	    table: string;
+	    conditions: FilterCondition[];
+	    rawWhere: string;
+	    sortColumn: string;
+	    sortDesc: boolean;
+	    page: number;
+	    pageSize: number;
+
+	    static createFrom(source: any = {}) {
+	        return new TableQuery(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.database = source["database"];
+	        this.table = source["table"];
+	        this.conditions = this.convertValues(source["conditions"], FilterCondition);
+	        this.rawWhere = source["rawWhere"];
+	        this.sortColumn = source["sortColumn"];
+	        this.sortDesc = source["sortDesc"];
+	        this.page = source["page"];
+	        this.pageSize = source["pageSize"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TableQueryPreview {
+	    sql: string;
+	    where: string;
+	    paramCount: number;
+
+	    static createFrom(source: any = {}) {
+	        return new TableQueryPreview(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sql = source["sql"];
+	        this.where = source["where"];
+	        this.paramCount = source["paramCount"];
+	    }
+	}
+	export class TableDataResponse {
+	    result: Result;
+	    columns: ColumnInfo[];
+	    executedSql: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TableDataResponse(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.result = this.convertValues(source["result"], Result);
+	        this.columns = this.convertValues(source["columns"], ColumnInfo);
+	        this.executedSql = source["executedSql"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class IndexInfo {
 	    name: string;
 	    type: string;

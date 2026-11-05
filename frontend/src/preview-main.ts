@@ -34,6 +34,88 @@ let lastAICanceled = false
 
 // mock go 绑定：仅 preview 用（FilePanel 依赖本地/远程列目录与传输列表）
 const previewGridPrefs = new Map<string, string>()
+
+// 数据标签预览列：覆盖数值/日期/枚举/JSON/BLOB，便于验证操作符矩阵与快捷筛选
+const previewColumns = [
+  { field: 'id', type: 'bigint unsigned', null: 'NO', key: 'PRI', default: undefined, extra: 'auto_increment', comment: '' },
+  { field: 'name', type: 'varchar(64)', null: 'YES', key: 'UNI', default: '', extra: '', comment: '用户名' },
+  { field: 'email', type: 'varchar(200)', null: 'YES', key: '', default: undefined, extra: '', comment: '邮箱' },
+  { field: 'status', type: "enum('new','paid','failed')", null: 'NO', key: '', default: 'new', extra: '', comment: '' },
+  { field: 'amount', type: 'decimal(12,2)', null: 'YES', key: '', default: undefined, extra: '', comment: '' },
+  { field: 'created_at', type: 'datetime', null: 'YES', key: '', default: undefined, extra: '', comment: '' },
+  { field: 'payload', type: 'json', null: 'YES', key: '', default: undefined, extra: '', comment: '' },
+  { field: 'avatar', type: 'blob', null: 'YES', key: '', default: undefined, extra: '', comment: '' },
+]
+const previewBaseRows: (string | null)[][] = [
+  ['1', 'alice', 'alice@example.com', 'paid', '10.50', '2026-10-01 10:00:00', '{"k":1}', ''],
+  ['2', null, "O'Reilly@example.com", 'new', '0.00', '2026-10-02 11:00:00', null, null],
+  ['9007199254740993', '张三', 'zh@example.com', 'failed', '99.99', '2026-09-30 09:00:00', '{"k":2}', null],
+]
+
+function previewRowsFor(force: number): (string | null)[][] {
+  if (force > previewBaseRows.length) {
+    return Array.from({ length: force }, (_, i) => [
+      String(i + 1),
+      `user${i}`,
+      `u${i}@example.com`,
+      ['new', 'paid', 'failed'][i % 3],
+      '1.00',
+      '2026-01-01 00:00:00',
+      null,
+      null,
+    ])
+  }
+  return previewBaseRows
+}
+
+function previewWhere(q: any): string {
+  const parts: string[] = []
+  for (const c of q?.conditions ?? []) {
+    const col = '`' + c.column + '`'
+    const esc = String(c.value ?? '').replace(/'/g, "''")
+    switch (c.op) {
+      case 'eq':
+        parts.push(`${col} = '${esc}'`)
+        break
+      case 'ne':
+        parts.push(`${col} <> '${esc}'`)
+        break
+      case 'gt':
+        parts.push(`${col} > '${esc}'`)
+        break
+      case 'gte':
+        parts.push(`${col} >= '${esc}'`)
+        break
+      case 'lt':
+        parts.push(`${col} < '${esc}'`)
+        break
+      case 'lte':
+        parts.push(`${col} <= '${esc}'`)
+        break
+      case 'contains':
+        parts.push(`${col} LIKE '%${esc.replace(/[!%_]/g, (m) => '!' + m)}%' ESCAPE '!'`)
+        break
+      case 'is_null':
+        parts.push(`${col} IS NULL`)
+        break
+      case 'is_not_null':
+        parts.push(`${col} IS NOT NULL`)
+        break
+    }
+  }
+  if (q?.rawWhere) parts.push(String(q.rawWhere))
+  return parts.join(' AND ')
+}
+
+function previewTableSQL(q: any): { sql: string; where: string } {
+  const from = `SELECT * FROM \`${q.database}\`.\`${q.table}\``
+  const where = previewWhere(q)
+  const sort = q.sortColumn ? ` ORDER BY \`${q.sortColumn}\` ${q.sortDesc ? 'DESC' : 'ASC'}` : ''
+  const offset = (q.page ?? 0) * (q.pageSize ?? 1000)
+  const whereSQL = where ? ` WHERE ${where}` : ''
+  return { sql: `${from}${whereSQL}${sort} LIMIT ${q.pageSize} OFFSET ${offset}`, where }
+}
+
 const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   LocalHome: async () => '/home/demo',
   LocalRoots: async () => ['C:\\', 'D:\\'],
@@ -82,11 +164,29 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
     { name: 'orders', isView: false, rows: 45210, comment: '' },
     { name: 'v_user_summary', isView: true, rows: 0, comment: '视图' },
   ],
-  DBDescribeTable: async () => [
-    { field: 'id', type: 'bigint unsigned', null: 'NO', key: 'PRI', default: undefined, extra: 'auto_increment', comment: '' },
-    { field: 'name', type: 'varchar(64)', null: 'NO', key: 'UNI', default: '', extra: '', comment: '用户名' },
-    { field: 'created_at', type: 'datetime', null: 'YES', key: '', default: 'CURRENT_TIMESTAMP', extra: '', comment: '' },
-  ],
+  DBDescribeTable: async () => previewColumns,
+  DBTableData: async (_id: string, q: any) => {
+    const w = window as any
+    const { sql } = previewTableSQL(q)
+    w.__dbQueries = [...(w.__dbQueries ?? []), sql]
+    if (w.__dbQueryFail) throw new Error('query timed out')
+    const forced = Number(new URLSearchParams(location.search).get('rows') ?? '0')
+    return {
+      result: {
+        columns: previewColumns.map((c) => c.field),
+        rows: previewRowsFor(forced),
+        affected: 0,
+        durationMs: 3,
+        truncated: false,
+      },
+      columns: previewColumns,
+      executedSql: sql,
+    }
+  },
+  DBPreviewTableSQL: async (_id: string, q: any) => {
+    const { sql, where } = previewTableSQL(q)
+    return { sql, where, paramCount: (q.conditions?.length ?? 0) + 2 }
+  },
   DBShowCreateTable: async () => 'CREATE TABLE `users` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(64) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;',
   DBTableMeta: async () => ({
     name: 'users', engine: 'InnoDB', collation: 'utf8mb4_general_ci', comment: '用户表',
@@ -236,17 +336,14 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
     const w = window as any
     w.__dbQueries = [...(w.__dbQueries ?? []), sql]
     if (w.__dbQueryFail) throw new Error('query timed out')
-    // ?rows=N 用于验证分页保护（返回恰好 N 行，使“下一页”可用）；默认为小样本
     const forced = Number(new URLSearchParams(location.search).get('rows') ?? '0')
-    const sample: (string | null)[][] = [
-      ['1', 'alice', '2026-01-01 10:00:00'],
-      ['2', null, '2026-01-02 11:30:00'],
-    ]
-    const rows =
-      forced > sample.length
-        ? Array.from({ length: forced }, (_, i) => [String(i + 1), i === 0 ? 'alice' : null, '2026-01-01 10:00:00'])
-        : sample
-    return { columns: ['id', 'name', 'created_at'], rows, affected: 0, durationMs: 3, truncated: false }
+    return {
+      columns: previewColumns.map((c) => c.field),
+      rows: previewRowsFor(forced),
+      affected: 0,
+      durationMs: 3,
+      truncated: false,
+    }
   },
   // 参数化更新：preview 直接返回“应用的行数”，不连真实数据库。
   // 记录调用参数，便于浏览器端验证前端只传结构化 pk/set（不拼 SQL）。

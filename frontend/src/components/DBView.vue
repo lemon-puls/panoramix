@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed, h, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
-import { NButton, NInput, NInputNumber, NPopover, NSelect } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NModal, NPopover, NSelect } from 'naive-ui'
 import {
   DBDescribeTable,
   DBListDatabases,
   DBListForeignKeys,
   DBListIndexes,
   DBListTables,
+  DBPreviewTableSQL,
   DBQuery,
   DBShowCreateTable,
+  DBTableData,
   DBTableMeta,
   DBUpdateRows,
   DeleteDBConn,
@@ -32,7 +34,16 @@ import IndexModal from './IndexModal.vue'
 import AIPanel from './AIPanel.vue'
 import AISettingsModal from './AISettingsModal.vue'
 import GridColumnsPanel from './GridColumnsPanel.vue'
+import GridFilterPanel from './GridFilterPanel.vue'
+import GridFilterChips from './GridFilterChips.vue'
 import { buildRowUpdates, countPendingEdits, shouldBlockUnguardedSwitch, type PendingEdit } from './dbEditing'
+import {
+  cloneConditions,
+  conditionError,
+  defaultOperatorForType,
+  type FilterCondition,
+  type FilterOp,
+} from './gridFilters'
 import {
   gridPrefKey,
   parseGridPref,
@@ -262,7 +273,7 @@ function ensureDataTab(db: string, tableName: string): WorkTab {
       // 切换了表：清空旧结果与旧编辑状态，等待重新加载。
       // pending 的截图已不存在，不能带着旧行索引进入新表；
       // 调用方必须在此之前完成保护确认（openTableStructure/openTableData 的入口守卫）。
-      tab.filter = ''
+      // 切表重置清单（漏一项就会串表）；filterMode 按设计在会话内保留
       tab.sortCol = ''
       tab.page = 0
       tab.result = null
@@ -276,6 +287,22 @@ function ensureDataTab(db: string, tableName: string): WorkTab {
       tab.hiddenColumns = []
       tab.columnsPrefLoaded = false
       tab.columnsPanelOpen = false
+      tab.filterPanelOpen = false
+      tab.conditions = []
+      tab.conditionsDraft = []
+      tab.rawWhere = ''
+      tab.rawWhereDraft = ''
+      tab.rawPrefill = ''
+      tab.conditionsSnapshot = null
+      tab.filterDirty = false
+      tab.filterPreviewSql = ''
+      tab.filterPreviewError = ''
+      tab.lastTableSQL = ''
+      tab.filterError = ''
+      tab.columnsStale = false
+      tab.metadataError = ''
+      tab.appliedSource = 'structured'
+      tab.loadSeq++
     }
     return tab
   }
@@ -313,7 +340,29 @@ interface WorkTab {
   database: string
   table: string
   sql: string
-  filter: string
+  // 筛选（Applied：当前结果对应的谓词）
+  filterMode: 'structured' | 'raw'
+  appliedSource: 'structured' | 'raw'
+  conditions: FilterCondition[]
+  rawWhere: string
+  lastTableSQL: string
+  filterError: string
+  // 筛选草稿 / SQL 预览
+  conditionsDraft: FilterCondition[]
+  rawWhereDraft: string
+  filterPanelOpen: boolean
+  filterPreviewSql: string
+  filterPreviewLoading: boolean
+  filterPreviewError: string
+  filterPreviewSeq: number
+  rawPrefill: string
+  conditionsSnapshot: FilterCondition[] | null
+  filterDirty: boolean
+  // 元数据
+  columnsStale: boolean
+  metadataError: string
+  // 查询序号：旧响应不得覆盖新状态
+  loadSeq: number
   page: number
   pageSize: number
   sortCol: string
@@ -363,7 +412,25 @@ function newTab(kind: TabKind, init: Partial<WorkTab>): WorkTab {
     database: '',
     table: '',
     sql: 'SELECT 1',
-    filter: '',
+    filterMode: 'structured',
+    appliedSource: 'structured',
+    conditions: [],
+    rawWhere: '',
+    lastTableSQL: '',
+    filterError: '',
+    conditionsDraft: [],
+    rawWhereDraft: '',
+    filterPanelOpen: false,
+    filterPreviewSql: '',
+    filterPreviewLoading: false,
+    filterPreviewError: '',
+    filterPreviewSeq: 0,
+    rawPrefill: '',
+    conditionsSnapshot: null,
+    filterDirty: false,
+    columnsStale: false,
+    metadataError: '',
+    loadSeq: 0,
     page: 0,
     pageSize: 1000,
     sortCol: '',
@@ -429,50 +496,104 @@ async function closeTab(id: string) {
   if (activeTabId.value === id) activeTabId.value = tabs.value.at(-1)?.id ?? ''
 }
 
-// 数据标签 SQL 生成（用户筛选条件原样拼入 WHERE，与 HeidiSQL 一致）
-function buildTableSQL(tab: WorkTab): string {
-  const parts = [`SELECT * FROM \`${tab.database}\`.\`${tab.table}\``]
-  const filter = tab.filter.trim()
-  if (filter) parts.push(`WHERE ${filter}`)
-  if (tab.sortCol) parts.push(`ORDER BY \`${tab.sortCol}\` ${tab.sortDir === 1 ? 'ASC' : 'DESC'}`)
-  parts.push(`LIMIT ${tab.pageSize} OFFSET ${tab.page * tab.pageSize}`)
-  return parts.join(' ')
+// 数据标签查询：结构化条件与 RawWhere 由后端校验并参数化生成
+function buildTableQuery(
+  tab: WorkTab,
+  conditions: FilterCondition[],
+  rawWhere: string,
+  page: number,
+): models.db.TableQuery {
+  return models.db.TableQuery.createFrom({
+    database: tab.database,
+    table: tab.table,
+    conditions: conditions.map((c) => ({ column: c.column, op: c.op, value: c.value })),
+    rawWhere,
+    sortColumn: tab.sortCol,
+    sortDesc: tab.sortDir < 0,
+    page,
+    pageSize: tab.pageSize,
+  })
 }
 
-async function loadTableData(tab: WorkTab, resetPage = false, intent: LoadIntent = 'plain'): Promise<boolean> {
+function errorCodeOf(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  const m = SERVICE_ERROR_RE.exec(raw)
+  return m ? m[1] : ''
+}
+
+// unknown_column：刷新一次元数据、移除失效条件/排序，最多重试一次
+async function dropStaleConditions(tab: WorkTab): Promise<boolean> {
+  let cols: models.db.ColumnInfo[]
+  try {
+    cols = (await DBDescribeTable(tab.connId, tab.database, tab.table)) ?? []
+  } catch {
+    return false
+  }
+  if (cols.length === 0) return false
+  tab.columns = cols
+  tab.pkColumns = cols.filter((c) => c.key === 'PRI').map((c) => c.field)
+  const names = new Set(cols.map((c) => c.field))
+  const before = tab.conditions.length + tab.conditionsDraft.length
+  tab.conditions = tab.conditions.filter((c) => names.has(c.column))
+  tab.conditionsDraft = tab.conditionsDraft.filter((c) => names.has(c.column))
+  const removed = before - (tab.conditions.length + tab.conditionsDraft.length)
+  let changed = removed > 0
+  if (tab.sortCol && !names.has(tab.sortCol)) {
+    tab.sortCol = ''
+    changed = true
+  }
+  if (removed > 0) message.info(t('db.filtersRemoved', { n: removed }))
+  return changed
+}
+
+async function loadTableData(
+  tab: WorkTab,
+  resetPage = false,
+  intent: LoadIntent = 'plain',
+  metadataRetried = false,
+): Promise<boolean> {
   // 单一收口：pending > 0 时普通加载直接拒绝，调用方必须先走确认流程
   if (intent === 'plain' && tab.pending.length > 0) {
     console.warn('[db] loadTableData blocked: pending edits require explicit discard intent')
     return false
   }
   if (resetPage) tab.page = 0
+  const seq = ++tab.loadSeq
   tab.loading = true
   tab.error = ''
+  tab.filterError = ''
   tab.pending = []
   tab.editing = null
   try {
-    const [res, cols] = await Promise.all([
-      DBQuery(tab.connId, buildTableSQL(tab), tab.pageSize),
-      // 数据标签需要完整列定义（筛选操作符/列面板类型与注释/PK），
-      // 后续切换到 DBTableData 后由同一响应携带，避免这次额外往返。
-      DBDescribeTable(tab.connId, tab.database, tab.table).catch(() => [] as models.db.ColumnInfo[]),
-    ])
-    tab.result = res
-    if (cols.length > 0) {
-      tab.columns = cols
-      tab.pkColumns = cols.filter((c) => c.key === 'PRI').map((c) => c.field)
-    }
+    const conditions = tab.appliedSource === 'structured' ? cloneConditions(tab.conditions) : []
+    const rawWhere = tab.appliedSource === 'raw' ? tab.rawWhere : ''
+    const resp = await DBTableData(tab.connId, buildTableQuery(tab, conditions, rawWhere, tab.page))
+    if (seq !== tab.loadSeq) return false
+    tab.result = resp.result
+    tab.columns = resp.columns ?? []
+    tab.lastTableSQL = resp.executedSql ?? ''
+    tab.pkColumns = tab.columns.filter((c) => c.key === 'PRI').map((c) => c.field)
+    tab.metadataError = ''
     await syncGridPref(tab)
+    if (seq !== tab.loadSeq) return false
     tab.gridSortCol = -1
     tab.selectedRow = -1
     tab.selectedCol = -1
     return true
   } catch (e) {
+    if (seq !== tab.loadSeq) return false
     // 查询失败保留上一次结果，界面用错误 banner 标注“显示的是上一次结果”
     tab.error = serviceErrorText(e)
+    tab.filterError = e instanceof Error ? e.message : String(e)
+    const code = errorCodeOf(e)
+    if (code === 'unknown_column' && !metadataRetried && tab.appliedSource === 'structured') {
+      const changed = await dropStaleConditions(tab)
+      if (changed) return loadTableData(tab, false, 'applied', true)
+    }
+    if (code === 'table_metadata_unavailable') tab.metadataError = tab.filterError
     return false
   } finally {
-    tab.loading = false
+    if (seq === tab.loadSeq) tab.loading = false
   }
 }
 
@@ -584,7 +705,347 @@ function toggleSortDirection(tab: WorkTab) {
   if (tab.sortCol) void sortTableByColumn(tab, tab.sortCol)
 }
 
+// ---------- 结构化筛选 / 高级 WHERE ----------
 
+const rawInputEl = ref<HTMLTextAreaElement | null>(null)
+const sqlViewer = reactive({ show: false, title: '', sql: '' })
+const previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function filterCount(tab: WorkTab): number {
+  return tab.conditions.length
+}
+
+function focusRawInput() {
+  nextTick(() => rawInputEl.value?.focus())
+}
+
+function openFilterPanel(tab: WorkTab) {
+  if (tab.filterMode === 'raw') {
+    focusRawInput()
+    return
+  }
+  if (!columnsForPanel(tab).length) {
+    message.warning(t('db.colDisabled'))
+    return
+  }
+  tab.columnsPanelOpen = false
+  if (!tab.filterPanelOpen) {
+    tab.conditionsDraft = cloneConditions(tab.conditions)
+    if (tab.conditionsDraft.length === 0) {
+      const first = columnsForPanel(tab)[0]
+      tab.conditionsDraft = [
+        { column: first.field, op: defaultOperatorForType(first.type), value: '' },
+      ]
+    }
+  }
+  tab.filterPanelOpen = true
+  nextTick(() => {
+    document.querySelector<HTMLInputElement>('.grid-filter-value input')?.focus()
+  })
+}
+
+function closeFilterPanel(tab: WorkTab) {
+  tab.filterPanelOpen = false
+}
+
+function onDraftChange(tab: WorkTab, draft: FilterCondition[]) {
+  tab.conditionsDraft = draft
+  scheduleStructuredPreview(tab)
+}
+
+function scheduleStructuredPreview(tab: WorkTab) {
+  const old = previewTimers.get(tab.id)
+  if (old) clearTimeout(old)
+  previewTimers.set(
+    tab.id,
+    setTimeout(() => {
+      void runPreview(tab, 'structured')
+    }, 250),
+  )
+}
+
+function scheduleRawPreview(tab: WorkTab) {
+  const old = previewTimers.get(tab.id)
+  if (old) clearTimeout(old)
+  previewTimers.set(
+    tab.id,
+    setTimeout(() => {
+      void runPreview(tab, 'raw')
+    }, 250),
+  )
+}
+
+// 草稿 SQL 预览：固定 page=0（应用筛选后回到第一页），旧响应按序号丢弃
+async function runPreview(tab: WorkTab, mode: 'structured' | 'raw') {
+  const seq = ++tab.filterPreviewSeq
+  tab.filterPreviewLoading = true
+  tab.filterPreviewError = ''
+  try {
+    const q =
+      mode === 'structured'
+        ? buildTableQuery(tab, tab.conditionsDraft, '', 0)
+        : buildTableQuery(tab, [], tab.rawWhereDraft, 0)
+    const preview = await DBPreviewTableSQL(tab.connId, q)
+    if (seq !== tab.filterPreviewSeq) return
+    tab.filterPreviewSql = preview.sql
+  } catch (e) {
+    if (seq !== tab.filterPreviewSeq) return
+    tab.filterPreviewSql = ''
+    tab.filterPreviewError = serviceErrorText(e)
+  } finally {
+    if (seq === tab.filterPreviewSeq) tab.filterPreviewLoading = false
+  }
+}
+
+async function applyStructured(tab: WorkTab) {
+  const draft = cloneConditions(tab.conditionsDraft)
+  if (draft.some((c) => conditionError(c, columnsForPanel(tab)) !== '')) {
+    message.error(t('db.filter.applyBlocked'))
+    return
+  }
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, true, guard, () => {
+    tab.conditions = draft
+    tab.rawWhere = ''
+    tab.appliedSource = 'structured'
+    tab.filterMode = 'structured'
+    tab.filterPanelOpen = false
+    tab.filterDirty = false
+    tab.page = 0
+  })
+}
+
+async function clearFilter(tab: WorkTab) {
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, true, guard, () => {
+    tab.conditions = []
+    tab.conditionsDraft = []
+    tab.rawWhere = ''
+    tab.rawWhereDraft = ''
+    tab.rawPrefill = ''
+    tab.conditionsSnapshot = null
+    tab.filterDirty = false
+    tab.filterPanelOpen = false
+    tab.appliedSource = 'structured'
+    tab.filterMode = 'structured'
+    tab.page = 0
+  })
+}
+
+async function removeCondition(tab: WorkTab, index: number) {
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, true, guard, () => {
+    tab.conditions = tab.conditions.filter((_, i) => i !== index)
+    tab.appliedSource = 'structured'
+    tab.rawWhere = ''
+    tab.page = 0
+  })
+}
+
+function editCondition(tab: WorkTab) {
+  openFilterPanel(tab)
+}
+
+function onRawInput(tab: WorkTab, value: string) {
+  tab.rawWhereDraft = value
+  tab.filterDirty =
+    tab.appliedSource === 'structured'
+      ? value !== tab.rawPrefill
+      : value.trim() !== tab.rawWhere.trim()
+  scheduleRawPreview(tab)
+}
+
+async function applyRaw(tab: WorkTab) {
+  const draft = tab.rawWhereDraft.trim()
+  if (tab.appliedSource === 'raw' && draft === tab.rawWhere.trim()) return
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, true, guard, () => {
+    tab.rawWhere = draft
+    tab.appliedSource = 'raw'
+    tab.filterDirty = false
+    tab.page = 0
+  })
+}
+
+// 结构化 → 高级：只切换编辑表面，appliedSource 仍是 structured，不重新查询
+async function switchToRaw(tab: WorkTab) {
+  try {
+    const preview = await DBPreviewTableSQL(
+      tab.connId,
+      buildTableQuery(tab, tab.conditions, '', 0),
+    )
+    tab.rawPrefill = preview.where ?? ''
+    tab.rawWhereDraft = tab.rawPrefill
+    tab.conditionsSnapshot = cloneConditions(tab.conditions)
+    tab.filterMode = 'raw'
+    tab.filterDirty = false
+    tab.filterPanelOpen = false
+    tab.columnsPanelOpen = false
+    focusRawInput()
+  } catch (e) {
+    message.error(serviceErrorText(e))
+  }
+}
+
+function copySQL(sql: string) {
+  if (!sql) return
+  navigator.clipboard?.writeText(sql).then(
+    () => message.success(t('db.sqlCopied')),
+    () => {
+      /* 忽略 */
+    },
+  )
+}
+
+function showSQL(title: string, sql: string) {
+  sqlViewer.title = title
+  sqlViewer.sql = sql
+  sqlViewer.show = true
+}
+
+function openSQLInQueryTab(sql: string) {
+  if (!sql) return
+  const n = tabs.value.filter((x) => x.kind === 'query').length + 1
+  const qtab = newTab('query', {
+    title: t('db.queryN', { n }),
+    sql: `${t('db.openInQueryComment')}\n${sql}`,
+  })
+  tabs.value.push(qtab)
+  sortTabs()
+  activeTabId.value = qtab.id
+  sqlViewer.show = false
+}
+
+function showExecutedSQL(tab: WorkTab) {
+  if (!tab.lastTableSQL) {
+    message.info(t('db.noExecutedSql'))
+    return
+  }
+  showSQL(t('db.executedSql'), tab.lastTableSQL)
+}
+
+async function showRawPreview(tab: WorkTab) {
+  try {
+    const preview = await DBPreviewTableSQL(
+      tab.connId,
+      buildTableQuery(tab, [], tab.rawWhereDraft, 0),
+    )
+    showSQL(t('db.previewSqlTitle'), preview.sql)
+  } catch (e) {
+    message.error(serviceErrorText(e))
+  }
+}
+
+// 高级 → 结构化：不做 SQL 解析，只按是否有未应用/已应用的高级文本走确认流程
+function confirmRawAction(
+  title: string,
+  content: string,
+  positiveText: string,
+  copyValue: string,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false
+    let dlg: { destroy: () => void } | null = null
+    const finish = (v: boolean) => {
+      if (done) return
+      done = true
+      dlg?.destroy()
+      resolve(v)
+    }
+    const button = (text: string, kind: 'default' | 'primary', onClick: () => void) =>
+      h(
+        NButton,
+        { size: 'small', type: kind === 'primary' ? 'primary' : 'default', onClick },
+        { default: () => text },
+      )
+    dlg = dialog.create({
+      type: 'warning',
+      title,
+      content: () => h('div', content),
+      action: () =>
+        h('div', { style: 'display:flex;justify-content:flex-end;gap:8px;margin-top:16px' }, [
+          button(t('db.filter.copySql'), 'default', () => copySQL(copyValue)),
+          button(t('common.cancel'), 'default', () => finish(false)),
+          button(positiveText, 'primary', () => finish(true)),
+        ]),
+      closable: false,
+      maskClosable: false,
+      closeOnEsc: false,
+      onClose: () => finish(false),
+    })
+  })
+}
+
+async function switchToStructured(tab: WorkTab) {
+  if (tab.filterMode !== 'raw') return
+  const draftChanged = tab.rawWhereDraft !== tab.rawPrefill
+
+  if (tab.appliedSource === 'structured') {
+    if (draftChanged) {
+      const ok = await confirmRawAction(
+        t('db.filter.discardDraftTitle'),
+        t('db.filter.discardDraftContent'),
+        t('db.filter.discardDraftOk'),
+        tab.rawWhereDraft,
+      )
+      if (!ok) return
+    }
+    // Applied 来源本来就是结构化：恢复条件快照即可，不查询
+    tab.filterMode = 'structured'
+    tab.rawWhere = ''
+    tab.rawWhereDraft = ''
+    tab.rawPrefill = ''
+    tab.conditionsSnapshot = null
+    tab.filterDirty = false
+    return
+  }
+
+  // appliedSource === 'raw'：清除高级 WHERE 并查一次无筛选结果，走 pending 保护
+  const ok = await confirmRawAction(
+    t('db.filter.clearRawTitle'),
+    t('db.filter.clearRawContent'),
+    t('db.filter.clearRawOk'),
+    tab.rawWhereDraft,
+  )
+  if (!ok) return
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, true, guard, () => {
+    tab.filterMode = 'structured'
+    tab.appliedSource = 'structured'
+    tab.conditions = []
+    tab.conditionsDraft = []
+    tab.rawWhere = ''
+    tab.rawWhereDraft = ''
+    tab.rawPrefill = ''
+    tab.conditionsSnapshot = null
+    tab.filterDirty = false
+    tab.page = 0
+  })
+}
+
+function onDataKeydown(e: KeyboardEvent) {
+  const tab = activeTab.value
+  if (!tab || tab.kind !== 'data') return
+  const mod = e.ctrlKey || e.metaKey
+  if (mod && !e.shiftKey && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    if (tab.filterMode === 'raw') focusRawInput()
+    else openFilterPanel(tab)
+    return
+  }
+  if (mod && e.shiftKey && e.key.toLowerCase() === 'l') {
+    e.preventDefault()
+    openColumnsPanel(tab)
+    nextTick(() => {
+      document.querySelector<HTMLInputElement>('.grid-columns-search input')?.focus()
+    })
+  }
+}
 
 // ---------- 数据单元格编辑 ----------
 
@@ -1589,14 +2050,47 @@ void load()
 
         <!-- 数据浏览标签 -->
         <template v-else-if="activeTab.kind === 'data'">
+          <div class="data-tab" @keydown="onDataKeydown">
           <div class="toolbar">
-            <n-input
-              v-model:value="activeTab.filter"
-              size="small"
-              :placeholder="t('db.filterPlaceholder')"
-              class="filter-input"
-              @keyup.enter="reloadTableData(activeTab, true)"
-            />
+            <n-popover
+              v-model:show="activeTab.filterPanelOpen"
+              trigger="manual"
+              placement="bottom-start"
+              :show-arrow="false"
+              raw
+            >
+              <template #trigger>
+                <n-button
+                  size="small"
+                  class="grid-filter-trigger"
+                  :class="{ active: activeTab.filterMode === 'raw' || filterCount(activeTab) > 0 }"
+                  :disabled="!!activeTab.metadataError"
+                  :title="activeTab.metadataError || t('db.filter.title')"
+                  @click="openFilterPanel(activeTab)"
+                >
+                  {{ filterCount(activeTab)
+                    ? t('db.filterButtonCount', { n: filterCount(activeTab) })
+                    : t('db.filterButton') }}
+                </n-button>
+              </template>
+              <GridFilterPanel
+                v-if="activeTab.filterPanelOpen"
+                :columns="columnsForPanel(activeTab)"
+                :draft="activeTab.conditionsDraft"
+                :hidden="activeTab.hiddenColumns"
+                :preview-sql="activeTab.filterPreviewSql"
+                :preview-loading="activeTab.filterPreviewLoading"
+                :preview-error="activeTab.filterPreviewError"
+                @update:draft="onDraftChange(activeTab, $event)"
+                @apply="applyStructured(activeTab)"
+                @clear="clearFilter(activeTab)"
+                @cancel="closeFilterPanel(activeTab)"
+                @switch-raw="switchToRaw(activeTab)"
+                @preview="scheduleStructuredPreview(activeTab)"
+                @copy-sql="copySQL"
+                @open-sql="openSQLInQueryTab"
+              />
+            </n-popover>
             <n-button size="small" :loading="activeTab.loading" @click="reloadTableData(activeTab, true)">
               {{ t('db.refresh') }}
             </n-button>
@@ -1701,6 +2195,40 @@ void load()
             </span>
           </div>
 
+          <GridFilterChips
+            v-if="activeTab.filterMode === 'structured' && activeTab.conditions.length > 0"
+            :conditions="activeTab.conditions"
+            @remove="removeCondition(activeTab, $event)"
+            @clear="clearFilter(activeTab)"
+            @add="openFilterPanel(activeTab)"
+            @edit="editCondition(activeTab)"
+          />
+
+          <div v-if="activeTab.filterMode === 'raw'" class="grid-raw-wrap">
+            <div class="grid-raw-row">
+              <span class="grid-raw-mode">{{ t('db.advancedWhere') }}</span>
+              <textarea
+                ref="rawInputEl"
+                class="grid-raw-input"
+                :value="activeTab.rawWhereDraft"
+                :placeholder="t('db.rawPlaceholder')"
+                spellcheck="false"
+                @input="onRawInput(activeTab, ($event.target as HTMLTextAreaElement).value)"
+                @keydown.ctrl.enter.prevent="applyRaw(activeTab)"
+                @keydown.meta.enter.prevent="applyRaw(activeTab)"
+              />
+              <span v-if="activeTab.filterDirty" class="grid-raw-dirty">{{ t('db.rawDirty') }}</span>
+              <n-button size="small" :disabled="!activeTab.filterDirty" @click="applyRaw(activeTab)">
+                {{ t('db.rawApply') }}
+              </n-button>
+              <n-button size="small" quaternary @click="showRawPreview(activeTab)">{{ t('db.rawPreview') }}</n-button>
+              <n-button size="small" quaternary @click="switchToStructured(activeTab)">
+                {{ t('db.backToStructured') }}
+              </n-button>
+            </div>
+            <div class="grid-raw-hint">{{ t('db.rawHint') }}</div>
+          </div>
+
           <div class="result">
             <div v-if="activeTab.error" class="query-error">
               {{ activeTab.error }}
@@ -1711,6 +2239,9 @@ void load()
                 {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
                 <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
                 <span class="spacer" />
+                <n-button size="tiny" quaternary :disabled="!activeTab.lastTableSQL" @click="showExecutedSQL(activeTab)">
+                  {{ t('db.executedSql') }}
+                </n-button>
                 <span class="hint">{{ t('db.gridHint') }}</span>
               </div>
               <div class="grid-wrap">
@@ -1766,6 +2297,7 @@ void load()
               <div class="empty-glyph">{{ activeTab.loading ? '◌' : '▤' }}</div>
               <div>{{ activeTab.loading ? t('db.loadingData') : t('db.noData') }}</div>
             </div>
+          </div>
           </div>
         </template>
 
@@ -2111,6 +2643,22 @@ void load()
       :tables="currentDbTables"
       @submit="submitIndex"
     />
+
+    <n-modal
+      v-model:show="sqlViewer.show"
+      preset="card"
+      :title="sqlViewer.title"
+      style="width: min(760px, calc(100vw - 32px))"
+    >
+      <pre class="grid-sql-viewer">{{ sqlViewer.sql }}</pre>
+      <div class="grid-sql-viewer-actions">
+        <span class="spacer" />
+        <n-button size="small" @click="copySQL(sqlViewer.sql)">{{ t('db.copySql') }}</n-button>
+        <n-button size="small" type="primary" @click="openSQLInQueryTab(sqlViewer.sql)">
+          {{ t('db.openInQuery') }}
+        </n-button>
+      </div>
+    </n-modal>
   </div>
 </template>
 
@@ -2403,8 +2951,7 @@ void load()
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-subtle);
   min-width: 0;
-}
-.toolbar > * {
+}.toolbar > * {
   flex-shrink: 0;
 }
 .grid-columns-trigger.warn {
@@ -2439,6 +2986,88 @@ void load()
   color: var(--warning);
   font-size: 11px;
   white-space: nowrap;
+}
+.data-tab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.grid-filter-trigger.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.grid-raw-wrap {
+  flex-shrink: 0;
+  padding: 6px 12px 8px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.grid-raw-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.grid-raw-mode {
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 24px;
+  white-space: nowrap;
+}
+.grid-raw-input {
+  flex: 1;
+  min-width: 120px;
+  min-height: 48px;
+  max-height: 120px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.grid-raw-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.grid-raw-dirty {
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 24px;
+  white-space: nowrap;
+}
+.grid-raw-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.grid-sql-viewer {
+  margin: 0;
+  padding: 10px;
+  max-height: 55vh;
+  overflow: auto;
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+.grid-sql-viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
 }
 .ctx {
   font-size: 12px;

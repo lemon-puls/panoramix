@@ -977,12 +977,68 @@ func (s *Service) DBUpdateRows(id, database, table string, updates []db.RowUpdat
 	}
 	applied, uerr := s.dbmgr.UpdateRows(c, pw, database, table, updates)
 	if uerr != nil {
-		log.Printf("[app] db update rows failed: table=%s rows=%d err=%s",
-			table, len(updates), redactSQLError(uerr))
+		log.Printf("[app] db update rows failed: table=%s rows=%d code=%s err=%s",
+			table, len(updates), db.ErrorCode(uerr), redactSQLError(uerr))
 		return 0, uerr
 	}
 	log.Printf("[app] db update rows ok: table=%s rows=%d", table, len(updates))
 	return applied, nil
+}
+
+// DBTableData 执行数据标签查询。
+// 结构化条件与 RawWhere 的校验/参数化 SQL 全部在 internal/db 完成；
+// 日志只记录表名、模式、条件数、耗时与错误码，不记录值或 RawWhere。
+func (s *Service) DBTableData(id string, q db.TableQuery) (*db.TableDataResponse, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
+	resp, qerr := s.dbmgr.TableData(c, pw, q)
+	if qerr != nil {
+		log.Printf("[app] db table data failed: table=%s mode=%s conds=%d code=%s duration=%dms err=%s",
+			q.Table, tableQueryMode(q), len(q.Conditions), db.ErrorCode(qerr),
+			time.Since(start).Milliseconds(), redactSQLError(qerr))
+		return nil, qerr
+	}
+	log.Printf("[app] db table data ok: table=%s mode=%s conds=%d page=%d duration=%dms",
+		q.Table, tableQueryMode(q), len(q.Conditions), q.Page, time.Since(start).Milliseconds())
+	return resp, nil
+}
+
+// DBPreviewTableSQL 返回与执行路径同一 builder 生成的可读 SQL（不执行）
+func (s *Service) DBPreviewTableSQL(id string, q db.TableQuery) (*db.TableQueryPreview, error) {
+	if s.dbmgr == nil {
+		return nil, fmt.Errorf("db manager not ready")
+	}
+	c, pw, err := s.dbConnAndPassword(id)
+	if err != nil {
+		return nil, err
+	}
+	start := time.Now()
+	preview, qerr := s.dbmgr.PreviewTableSQL(c, pw, q)
+	if qerr != nil {
+		log.Printf("[app] db preview sql failed: table=%s mode=%s conds=%d code=%s duration=%dms err=%s",
+			q.Table, tableQueryMode(q), len(q.Conditions), db.ErrorCode(qerr),
+			time.Since(start).Milliseconds(), redactSQLError(qerr))
+		return nil, qerr
+	}
+	return preview, nil
+}
+
+// tableQueryMode 仅用于日志，不记录条件值
+func tableQueryMode(q db.TableQuery) string {
+	switch {
+	case len(q.Conditions) > 0:
+		return "structured"
+	case strings.TrimSpace(q.RawWhere) != "":
+		return "raw"
+	default:
+		return "none"
+	}
 }
 
 // DBListDatabases 列出数据库（MySQL）

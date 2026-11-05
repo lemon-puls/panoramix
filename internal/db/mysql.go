@@ -288,8 +288,29 @@ func (m *Manager) Query(c store.DBConn, password, sqlText string, limit int) (*R
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
-	defer rows.Close()
+	out, err := scanRows(rows, limit)
+	if err != nil {
+		return nil, err
+	}
+	out.DurationMs = time.Since(start).Milliseconds()
+	return out, nil
+}
 
+// queryArgs 执行参数化查询（值全部走 ? 占位符）
+func queryArgs(ctx context.Context, db *sql.DB, sqlText string, args []any, limit int) (*Result, error) {
+	if limit <= 0 || limit > 5000 {
+		limit = 1000
+	}
+	rows, err := db.QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	return scanRows(rows, limit)
+}
+
+// scanRows 扫描结果集（Query 与 TableData 共用）。调用方负责关闭 rows。
+func scanRows(rows *sql.Rows, limit int) (*Result, error) {
+	defer rows.Close()
 	cols, err := rows.Columns()
 	if err != nil {
 		return nil, fmt.Errorf("columns: %w", err)
@@ -321,7 +342,6 @@ func (m *Manager) Query(c store.DBConn, password, sqlText string, limit int) (*R
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
-	out.DurationMs = time.Since(start).Milliseconds()
 	return out, nil
 }
 
