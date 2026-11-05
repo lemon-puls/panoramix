@@ -20,6 +20,7 @@ const props = defineProps<{
   previewSql: string
   previewLoading: boolean
   previewError: string
+  loading?: boolean
 }>()
 const emit = defineEmits<{
   'update:draft': [FilterCondition[]]
@@ -157,7 +158,7 @@ function valuePlaceholder(index: number): string {
     </div>
 
     <div class="grid-filter-tools">
-      <n-button size="tiny" quaternary :disabled="!canAdd" @click="addRow">
+      <n-button size="tiny" quaternary :disabled="!canAdd || loading" @click="addRow">
         {{ t('db.filter.add') }}
       </n-button>
       <span v-if="!canAdd && columns.length" class="grid-filter-hint">{{ t('db.filter.maxHint') }}</span>
@@ -186,9 +187,9 @@ function valuePlaceholder(index: number): string {
     <div class="grid-filter-footer">
       <n-button size="tiny" quaternary @click="emit('switch-raw')">{{ t('db.filter.useRaw') }}</n-button>
       <span class="spacer" />
-      <n-button size="small" quaternary type="error" @click="emit('clear')">{{ t('db.filter.clear') }}</n-button>
+      <n-button size="small" quaternary type="error" :disabled="loading" @click="emit('clear')">{{ t('db.filter.clear') }}</n-button>
       <n-button size="small" @click="emit('cancel')">{{ t('common.cancel') }}</n-button>
-      <n-button size="small" type="primary" :disabled="hasError || columns.length === 0" @click="emit('apply')">
+      <n-button size="small" type="primary" :disabled="hasError || columns.length === 0 || loading" @click="emit('apply')">
         {{ t('db.filter.apply') }}
       </n-button>
     </div>

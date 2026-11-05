@@ -7,6 +7,7 @@ import { opNeedsValue, type FilterCondition } from './gridFilters'
 // 已应用条件的 chip 回显；× 立即移除并重查（由父组件走保护）。
 const props = defineProps<{
   conditions: FilterCondition[]
+  loading?: boolean
 }>()
 const emit = defineEmits<{
   remove: [number]
@@ -43,21 +44,22 @@ const visible = computed(() => props.conditions.length > 0)
       :key="i"
       class="grid-filter-chip"
       :title="fullLabel(cond)"
-      @click="emit('edit', i)"
+      @click="!loading && emit('edit', i)"
     >
       <span class="grid-filter-chip-text">{{ label(cond) }}</span>
       <span
         class="grid-filter-chip-x"
         role="button"
         :aria-label="t('db.filter.remove')"
-        @click.stop="emit('remove', i)"
+        :class="{ disabled: loading }"
+        @click.stop="!loading && emit('remove', i)"
       >×</span>
     </button>
-    <n-button size="tiny" quaternary class="grid-filter-add-chip" @click="emit('add')">
+    <n-button size="tiny" quaternary class="grid-filter-add-chip" :disabled="loading" @click="emit('add')">
       {{ t('db.filter.add') }}
     </n-button>
     <span class="spacer" />
-    <n-button size="tiny" quaternary @click="emit('clear')">{{ t('db.filter.clearAll') }}</n-button>
+    <n-button size="tiny" quaternary :disabled="loading" @click="emit('clear')">{{ t('db.filter.clearAll') }}</n-button>
   </div>
 </template>
 
@@ -100,6 +102,10 @@ const visible = computed(() => props.conditions.length > 0)
 }
 .grid-filter-chip-x:hover {
   color: var(--danger);
+}
+.grid-filter-chip-x.disabled {
+  opacity: 0.4;
+  pointer-events: none;
 }
 .spacer {
   flex: 1;

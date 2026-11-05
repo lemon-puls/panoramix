@@ -717,6 +717,18 @@ function filterCount(tab: WorkTab): number {
   return tab.conditions.length
 }
 
+function hasAppliedPredicate(tab: WorkTab): boolean {
+  return tab.appliedSource === 'raw' ? tab.rawWhere.trim() !== '' : tab.conditions.length > 0
+}
+
+async function gotoFirstPage(tab: WorkTab) {
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, false, guard, () => {
+    tab.page = 0
+  })
+}
+
 function focusRawInput() {
   nextTick(() => rawInputEl.value?.focus())
 }
@@ -800,6 +812,7 @@ async function runPreview(tab: WorkTab, mode: 'structured' | 'raw') {
 }
 
 async function applyStructured(tab: WorkTab) {
+  if (tab.loading) return
   const draft = cloneConditions(tab.conditionsDraft)
   if (draft.some((c) => conditionError(c, columnsForPanel(tab)) !== '')) {
     message.error(t('db.filter.applyBlocked'))
@@ -819,6 +832,7 @@ async function applyStructured(tab: WorkTab) {
 }
 
 async function clearFilter(tab: WorkTab) {
+  if (tab.loading) return
   const guard = await guardPendingTabs([tab])
   if (!guard.ok) return
   await reloadAfterGuard(tab, true, guard, () => {
@@ -837,6 +851,7 @@ async function clearFilter(tab: WorkTab) {
 }
 
 async function removeCondition(tab: WorkTab, index: number) {
+  if (tab.loading) return
   const guard = await guardPendingTabs([tab])
   if (!guard.ok) return
   await reloadAfterGuard(tab, true, guard, () => {
@@ -861,6 +876,7 @@ function onRawInput(tab: WorkTab, value: string) {
 }
 
 async function applyRaw(tab: WorkTab) {
+  if (tab.loading) return
   const draft = tab.rawWhereDraft.trim()
   if (tab.appliedSource === 'raw' && draft === tab.rawWhere.trim()) return
   const guard = await guardPendingTabs([tab])
@@ -1546,6 +1562,7 @@ async function reloadAfterGuard(
 
 // 数据标签重查入口（刷新/筛选/页大小）：先确认，再加载
 async function reloadTableData(tab: WorkTab, resetPage = false): Promise<void> {
+  if (tab.loading) return
   const guard = await guardPendingTabs([tab])
   if (!guard.ok) return
   await reloadAfterGuard(tab, resetPage, guard)
@@ -1560,6 +1577,7 @@ async function applyEdits(tab: WorkTab) {
 }
 
 async function sortTableByColumn(tab: WorkTab, colName: string) {
+  if (tab.loading) return
   // 先确认再改排序：取消时排序状态与页码都不变
   const guard = await guardPendingTabs([tab])
   if (!guard.ok) return
@@ -1577,6 +1595,7 @@ function hasNextPage(tab: WorkTab): boolean {
 }
 
 async function nextPage(tab: WorkTab) {
+  if (tab.loading) return
   const guard = await guardPendingTabs([tab])
   if (!guard.ok) return
   await reloadAfterGuard(tab, false, guard, () => {
@@ -1585,7 +1604,7 @@ async function nextPage(tab: WorkTab) {
 }
 
 async function prevPage(tab: WorkTab) {
-  if (tab.page === 0) return
+  if (tab.page === 0 || tab.loading) return
   const guard = await guardPendingTabs([tab])
   if (!guard.ok) return
   await reloadAfterGuard(tab, false, guard, () => {
@@ -1595,7 +1614,7 @@ async function prevPage(tab: WorkTab) {
 
 // 页大小：先确认再改值；取消时下拉框仍显示原值（:value 绑定）
 async function changePageSize(tab: WorkTab, size: number | null) {
-  if (size == null || size === tab.pageSize) return
+  if (size == null || size === tab.pageSize || tab.loading) return
   const guard = await guardPendingTabs([tab])
   if (!guard.ok) return
   await reloadAfterGuard(tab, false, guard, () => {
@@ -2369,6 +2388,7 @@ void load()
                 :preview-sql="activeTab.filterPreviewSql"
                 :preview-loading="activeTab.filterPreviewLoading"
                 :preview-error="activeTab.filterPreviewError"
+                :loading="activeTab.loading"
                 @update:draft="onDraftChange(activeTab, $event)"
                 @apply="applyStructured(activeTab)"
                 @clear="clearFilter(activeTab)"
@@ -2486,6 +2506,7 @@ void load()
           <GridFilterChips
             v-if="activeTab.filterMode === 'structured' && activeTab.conditions.length > 0"
             :conditions="activeTab.conditions"
+            :loading="activeTab.loading"
             @remove="removeCondition(activeTab, $event)"
             @clear="clearFilter(activeTab)"
             @add="openFilterPanel(activeTab)"
@@ -2584,8 +2605,36 @@ void load()
               </div>
             </template>
             <div v-else-if="!activeTab.error" class="result-empty">
-              <div class="empty-glyph">{{ activeTab.loading ? '◌' : '▤' }}</div>
-              <div>{{ activeTab.loading ? t('db.loadingData') : t('db.noData') }}</div>
+              <template v-if="activeTab.loading">
+                <div class="empty-glyph">◌</div>
+                <div>{{ t('db.loadingData') }}</div>
+              </template>
+              <template v-else-if="(activeTab.result?.rows?.length ?? 0) === 0 && activeTab.page > 0">
+                <div class="empty-glyph">▤</div>
+                <div>{{ t('db.empty.page') }}</div>
+                <div class="empty-actions">
+                  <n-button size="small" @click="prevPage(activeTab)">{{ t('db.empty.prevPage') }}</n-button>
+                  <n-button size="small" type="primary" secondary @click="gotoFirstPage(activeTab)">
+                    {{ t('db.empty.firstPage') }}
+                  </n-button>
+                </div>
+              </template>
+              <template
+                v-else-if="(activeTab.result?.rows?.length ?? 0) === 0 && hasAppliedPredicate(activeTab)"
+              >
+                <div class="empty-glyph">∅</div>
+                <div>{{ t('db.empty.filtered') }}</div>
+                <div class="empty-actions">
+                  <n-button size="small" @click="openFilterPanel(activeTab)">{{ t('db.empty.adjustFilter') }}</n-button>
+                  <n-button size="small" type="primary" secondary @click="clearFilter(activeTab)">
+                    {{ t('db.empty.clearFilter') }}
+                  </n-button>
+                </div>
+              </template>
+              <template v-else>
+                <div class="empty-glyph">▤</div>
+                <div>{{ t('db.empty.table') }}</div>
+              </template>
             </div>
           </div>
           </div>
@@ -3633,6 +3682,12 @@ void load()
   align-items: center;
   gap: 8px;
   text-align: center;
+}
+.empty-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
 }
 .empty-glyph {
   font-size: 30px;
