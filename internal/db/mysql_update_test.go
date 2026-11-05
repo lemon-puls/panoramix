@@ -393,7 +393,7 @@ func TestValidateRowUpdatesRejectsPartialCompositePK(t *testing.T) {
 		PK:  map[string]*string{"id": strPtr("1")}, // 少了 tenant_id
 		Set: map[string]*string{"name": strPtr("x")},
 	}}
-	assertErrorCode(t, validateRowUpdates(cols, pks, updates), errCodePKMismatch)
+	assertErrorCode(t, validateRowUpdates(cols, pks, updates), ErrCodeApplyEditsFailed)
 }
 
 func TestValidateRowUpdatesRejectsNonPKColumnInPK(t *testing.T) {
@@ -403,7 +403,7 @@ func TestValidateRowUpdatesRejectsNonPKColumnInPK(t *testing.T) {
 		PK:  map[string]*string{"id": strPtr("1"), "name": strPtr("x")},
 		Set: map[string]*string{"tenant_id": strPtr("t1")},
 	}}
-	assertErrorCode(t, validateRowUpdates(cols, pks, updates), errCodePKMismatch)
+	assertErrorCode(t, validateRowUpdates(cols, pks, updates), ErrCodeApplyEditsFailed)
 }
 
 func TestValidateRowUpdatesRejectsUnknownColumns(t *testing.T) {
@@ -413,12 +413,12 @@ func TestValidateRowUpdatesRejectsUnknownColumns(t *testing.T) {
 	assertErrorCode(t, validateRowUpdates(cols, pks, []RowUpdate{{
 		PK:  map[string]*string{"id": strPtr("1")},
 		Set: map[string]*string{"nope": strPtr("x")},
-	}}), errCodeUnknownColumn)
+	}}), ErrCodeApplyEditsFailed)
 	// 主键列不存在
 	assertErrorCode(t, validateRowUpdates(cols, pks, []RowUpdate{{
 		PK:  map[string]*string{"nope": strPtr("1")},
 		Set: map[string]*string{"name": strPtr("x")},
-	}}), errCodeUnknownColumn)
+	}}), ErrCodeApplyEditsFailed)
 }
 
 func TestValidateRowUpdatesRejectsTableWithoutPK(t *testing.T) {
@@ -426,7 +426,7 @@ func TestValidateRowUpdatesRejectsTableWithoutPK(t *testing.T) {
 	assertErrorCode(t, validateRowUpdates(cols, map[string]bool{}, []RowUpdate{{
 		PK:  map[string]*string{"id": strPtr("1")},
 		Set: map[string]*string{"name": strPtr("x")},
-	}}), errCodePKMismatch)
+	}}), ErrCodeApplyEditsFailed)
 }
 
 func TestValidateRowUpdatesRejectsTooManyRows(t *testing.T) {
@@ -438,7 +438,7 @@ func TestValidateRowUpdatesRejectsTooManyRows(t *testing.T) {
 	for i := range updates {
 		updates[i] = RowUpdate{PK: pk, Set: set}
 	}
-	assertErrorCode(t, validateRowUpdates(cols, pks, updates), errCodeTooManyUpdates)
+	assertErrorCode(t, validateRowUpdates(cols, pks, updates), ErrCodeTooManyEdits)
 }
 
 func TestValidateRowUpdatesAcceptsCompositePK(t *testing.T) {
@@ -465,7 +465,7 @@ func TestUpdateRowsOnDBRejectsPartialCompositePKBeforeExec(t *testing.T) {
 		Set: map[string]*string{"name": strPtr("x")},
 	}}
 	applied, err := updateRowsOnDB(context.Background(), db, "app", "memberships", updates)
-	assertErrorCode(t, err, errCodePKMismatch)
+	assertErrorCode(t, err, ErrCodeApplyEditsFailed)
 	if applied != 0 {
 		t.Fatalf("applied = %d, want 0", applied)
 	}
@@ -487,7 +487,7 @@ func TestUpdateRowsOnDBRejectsUnknownColumnBeforeExec(t *testing.T) {
 		PK:  map[string]*string{"id": strPtr("1")},
 		Set: map[string]*string{"missing_col": strPtr("x")},
 	}})
-	assertErrorCode(t, err, errCodeUnknownColumn)
+	assertErrorCode(t, err, ErrCodeApplyEditsFailed)
 	if applied != 0 || len(conn.execs) != 0 {
 		t.Fatalf("applied=%d execs=%d, want 0/0", applied, len(conn.execs))
 	}
@@ -529,11 +529,11 @@ func TestManagerUpdateRowsRejectsBeforeConnecting(t *testing.T) {
 	m := NewManager()
 	tooMany := make([]RowUpdate, maxRowUpdates+1)
 	_, err := m.UpdateRows(store.DBConn{}, "", "app", "users", tooMany)
-	assertErrorCode(t, err, errCodeTooManyUpdates)
+	assertErrorCode(t, err, ErrCodeTooManyEdits)
 
 	_, err = m.UpdateRows(store.DBConn{}, "", "  ", "users", []RowUpdate{{
 		PK:  map[string]*string{"id": strPtr("1")},
 		Set: map[string]*string{"name": strPtr("x")},
 	}})
-	assertErrorCode(t, err, errCodeInvalidUpdate)
+	assertErrorCode(t, err, ErrCodeApplyEditsFailed)
 }

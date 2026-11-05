@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildRowUpdates, countPendingEdits } from './dbEditing'
+import { buildRowUpdates, countPendingEdits, shouldBlockUnguardedSwitch } from './dbEditing'
 
 describe('countPendingEdits', () => {
   it('sums pending edits across tabs', () => {
@@ -14,6 +14,24 @@ describe('countPendingEdits', () => {
 
   it('returns 0 for empty input', () => {
     expect(countPendingEdits([])).toBe(0)
+  })
+})
+
+describe('shouldBlockUnguardedSwitch', () => {
+  it('allows the initial assignment (prev is empty)', () => {
+    expect(shouldBlockUnguardedSwitch('', 'mysql-1', 3)).toBe(false)
+  })
+
+  it('allows re-selecting the same connection', () => {
+    expect(shouldBlockUnguardedSwitch('mysql-1', 'mysql-1', 3)).toBe(false)
+  })
+
+  it('allows switching when there are no pending edits', () => {
+    expect(shouldBlockUnguardedSwitch('mysql-1', 'redis-1', 0)).toBe(false)
+  })
+
+  it('blocks a direct switch that bypassed selectConn', () => {
+    expect(shouldBlockUnguardedSwitch('mysql-1', 'redis-1', 1)).toBe(true)
   })
 })
 

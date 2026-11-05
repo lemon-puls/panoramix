@@ -234,6 +234,7 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   DBQuery: async (_id: string, sql: string) => {
     const w = window as any
     w.__dbQueries = [...(w.__dbQueries ?? []), sql]
+    if (w.__dbQueryFail) throw new Error('query timed out')
     // ?rows=N 用于验证分页保护（返回恰好 N 行，使“下一页”可用）；默认为小样本
     const forced = Number(new URLSearchParams(location.search).get('rows') ?? '0')
     const sample: (string | null)[][] = [
@@ -252,7 +253,7 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
     const w = window as any
     w.__dbUpdateCalls = [...(w.__dbUpdateCalls ?? []), { db, table, updates }]
     // 预览调试开关：模拟后端写入失败（验证“应用失败则中止原操作”）
-    if (w.__dbUpdateFail) throw new Error('update_failed: simulated failure')
+    if (w.__dbUpdateFail) throw new Error('apply_edits_failed: simulated failure')
     return updates?.length ?? 0
   },
   RedisScanKeys: async () => ({ keys: [

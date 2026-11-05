@@ -2,7 +2,7 @@
 import { computed, h, inject, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDialog, useMessage } from 'naive-ui'
-import { NButton, NInput, NInputNumber } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NSelect } from 'naive-ui'
 import {
   DBDescribeTable,
   DBListDatabases,
@@ -29,15 +29,27 @@ import ColumnModal from './ColumnModal.vue'
 import IndexModal from './IndexModal.vue'
 import AIPanel from './AIPanel.vue'
 import AISettingsModal from './AISettingsModal.vue'
-import { buildRowUpdates, countPendingEdits, type PendingEdit } from './dbEditing'
+import { buildRowUpdates, countPendingEdits, shouldBlockUnguardedSwitch, type PendingEdit } from './dbEditing'
 
 // 数据库视图（HeidiSQL 风格）：
 // 左：连接 → 库 → 表 树；右：SQL 工作台（编辑器 + 结果/结构）或 Redis 值查看器
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
 const message = useMessage()
 const dialog = useDialog()
 // App 注入的视图切换守卫：切到终端视图前 await，防止未提交修改随组件卸载丢失
 const viewGuard = inject<{ fn: (() => Promise<boolean>) | null } | null>('viewGuard', null)
+
+// 后端错误统一为 "code: message"；按 code 映射 i18n，未知 code 原样展示。
+// 不按英文 message 文本匹配（文案/数据库版本会变）。
+const SERVICE_ERROR_RE = /^([a-z_]+):\s*([\s\S]*)$/
+function serviceErrorText(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  const m = SERVICE_ERROR_RE.exec(raw)
+  if (!m) return raw
+  const key = `db.err.${m[1]}`
+  if (!te(key)) return raw
+  return t(key, { message: m[2] })
+}
 
 const conns = ref<models.store.DBConn[]>([])
 const activeId = ref<string>('')
@@ -55,7 +67,7 @@ async function load() {
     conns.value = (await ListDBConns()) ?? []
     if (!activeId.value && conns.value.length > 0) activeId.value = conns.value[0].id
   } catch (e) {
-    loadError.value = String(e)
+    loadError.value = serviceErrorText(e)
     console.error('[db] load connections failed', e)
   }
 }
@@ -76,7 +88,7 @@ async function onSaved() {
 
 async function askDelete(c: models.store.DBConn) {
   // 删除当前连接会清空全部标签；先保护未提交修改
-  if (c.id === activeId.value && !(await guardPendingTabs(dataTabsWithPending()))) return
+  if (c.id === activeId.value && !(await guardPendingTabs(dataTabsWithPending())).ok) return
   dialog.warning({
     title: t('tree.deleteTitle'),
     content: t('db.deleteConfirm', { name: c.name }),
@@ -89,7 +101,7 @@ async function askDelete(c: models.store.DBConn) {
         await load()
         message.success(t('common.saved'))
       } catch (e) {
-        message.error(String(e))
+        message.error(serviceErrorText(e))
       }
     },
   })
@@ -99,7 +111,7 @@ async function askDelete(c: models.store.DBConn) {
 // 不要在其他地方直接给 activeId 赋值（删除连接/首次加载除外，那两条路径没有 pending）。
 async function selectConn(c: models.store.DBConn) {
   if (c.id === activeId.value) return
-  if (!(await guardPendingTabs(dataTabsWithPending()))) return
+  if (!(await guardPendingTabs(dataTabsWithPending())).ok) return
   activeId.value = c.id
 }
 
@@ -108,7 +120,7 @@ async function testConn(c: models.store.DBConn) {
     await TestDBConn(c.id)
     message.success(t('db.testOk'))
   } catch (e) {
-    message.error(String(e))
+    message.error(serviceErrorText(e))
   }
 }
 
@@ -134,7 +146,7 @@ async function toggleConn() {
   try {
     databases.value = (await DBListDatabases(active.value.id)) ?? []
   } catch (e) {
-    message.error(String(e))
+    message.error(serviceErrorText(e))
   } finally {
     treeLoading.value = false
   }
@@ -151,7 +163,7 @@ async function toggleDb(db: string) {
       try {
         tablesByDb[db] = (await DBListTables(active.value.id, db)) ?? []
       } catch (e) {
-        message.error(String(e))
+        message.error(serviceErrorText(e))
         tablesByDb[db] = []
       }
     }
@@ -166,7 +178,7 @@ async function openTableStructure(db: string, table: models.db.TableInfo) {
   const prior = currentDataTab()
   const hadPending = !!prior && prior.pending.length > 0
   // 打开/查看结构前也保护 pending（即使还是同一张表，DDL 可能让旧值失效）
-  if (!(await guardPendingTabs(prior ? [prior] : []))) return
+  if (!(await guardPendingTabs(prior ? [prior] : [])).ok) return
 
   const structTab = ensureStructureTab(db, table.name)
   const dataTab = ensureDataTab(db, table.name)
@@ -220,7 +232,7 @@ async function loadTableStructure(tab: WorkTab) {
     tab.indexes = idx ?? []
     tab.foreignKeys = fks ?? []
   } catch (e) {
-    tab.error = String(e)
+    tab.error = serviceErrorText(e)
   } finally {
     tab.loading = false
   }
@@ -268,7 +280,7 @@ function ensureDataTab(db: string, tableName: string): WorkTab {
 // 双击是显式重查：即使表没变也要先确认未提交修改
 async function openTableData(db: string, table: models.db.TableInfo) {
   const prior = currentDataTab()
-  if (!(await guardPendingTabs(prior ? [prior] : []))) return
+  if (!(await guardPendingTabs(prior ? [prior] : [])).ok) return
   ensureStructureTab(db, table.name)
   const tab = ensureDataTab(db, table.name)
   activeTabId.value = tab.id
@@ -391,7 +403,7 @@ async function closeTab(id: string) {
   const tab = tabs.value[idx]
   if (!canCloseTab(tab)) return
   // 数据标签目前固定（pinned）不可关闭；这里仍兜底保护，避免未来放开后静默丢修改
-  if (!(await guardPendingTabs([tab]))) return
+  if (!(await guardPendingTabs([tab])).ok) return
   tabs.value.splice(idx, 1)
   if (activeTabId.value === id) activeTabId.value = tabs.value.at(-1)?.id ?? ''
 }
@@ -406,11 +418,11 @@ function buildTableSQL(tab: WorkTab): string {
   return parts.join(' ')
 }
 
-async function loadTableData(tab: WorkTab, resetPage = false, intent: LoadIntent = 'plain') {
+async function loadTableData(tab: WorkTab, resetPage = false, intent: LoadIntent = 'plain'): Promise<boolean> {
   // 单一收口：pending > 0 时普通加载直接拒绝，调用方必须先走确认流程
   if (intent === 'plain' && tab.pending.length > 0) {
     console.warn('[db] loadTableData blocked: pending edits require explicit discard intent')
-    return
+    return false
   }
   if (resetPage) tab.page = 0
   tab.loading = true
@@ -431,9 +443,11 @@ async function loadTableData(tab: WorkTab, resetPage = false, intent: LoadIntent
     tab.gridSortCol = -1
     tab.selectedRow = -1
     tab.selectedCol = -1
+    return true
   } catch (e) {
-    tab.error = String(e)
-    tab.result = null
+    // 查询失败保留上一次结果，界面用错误 banner 标注“显示的是上一次结果”
+    tab.error = serviceErrorText(e)
+    return false
   } finally {
     tab.loading = false
   }
@@ -603,7 +617,7 @@ async function persistEdits(tab: WorkTab): Promise<boolean> {
     message.success(t('db.editsApplied', { n: applied }))
     return true
   } catch (e) {
-    message.error(String(e))
+    message.error(serviceErrorText(e))
     return false
   } finally {
     tab.loading = false
@@ -619,37 +633,61 @@ async function persistPendingTabs(targets: WorkTab[]): Promise<boolean> {
 }
 
 // 统一守卫：无 pending 直接放行；否则按用户选择取消 / 丢弃 / 先应用。
-// 返回 false 表示原操作必须中止（用户取消，或“应用并继续”执行失败）。
-async function guardPendingTabs(targets: WorkTab[]): Promise<boolean> {
+// ok=false 表示原操作必须中止（用户取消，或“应用并继续”执行失败）。
+interface GuardOutcome {
+  ok: boolean
+  applied: boolean
+}
+
+async function guardPendingTabs(targets: WorkTab[]): Promise<GuardOutcome> {
   const decision = await decidePending(targets)
-  if (decision === 'cancel') return false
-  if (decision === 'apply') return persistPendingTabs(targets)
+  if (decision === 'cancel') return { ok: false, applied: false }
+  if (decision === 'apply') {
+    const ok = await persistPendingTabs(targets)
+    return { ok, applied: ok }
+  }
   if (decision === 'discard') discardPendingTabs(targets)
-  return true
+  return { ok: true, applied: false }
+}
+
+// 保护通过后按目标状态重查；若刚刚应用过修改而重查失败，明确提示用户
+async function reloadAfterGuard(
+  tab: WorkTab,
+  resetPage: boolean,
+  guard: GuardOutcome,
+  mutate?: () => void,
+): Promise<void> {
+  mutate?.()
+  const ok = await loadTableData(tab, resetPage, 'discard')
+  if (guard.applied && !ok) message.warning(t('db.editsAppliedReloadFailed'))
 }
 
 // 数据标签重查入口（刷新/筛选/页大小）：先确认，再加载
 async function reloadTableData(tab: WorkTab, resetPage = false): Promise<void> {
-  if (!(await guardPendingTabs([tab]))) return
-  await loadTableData(tab, resetPage, 'discard')
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, resetPage, guard)
 }
 
 // 应用按钮：先写库，成功后刷新
 async function applyEdits(tab: WorkTab) {
   if (!(await persistEdits(tab))) return
   // 已成功提交，允许重查清空 pending
-  await loadTableData(tab, false, 'applied')
+  const ok = await loadTableData(tab, false, 'applied')
+  if (!ok) message.warning(t('db.editsAppliedReloadFailed'))
 }
 
 async function sortTableByColumn(tab: WorkTab, colName: string) {
   // 先确认再改排序：取消时排序状态与页码都不变
-  if (!(await guardPendingTabs([tab]))) return
-  if (tab.sortCol === colName) tab.sortDir = tab.sortDir === 1 ? -1 : 1
-  else {
-    tab.sortCol = colName
-    tab.sortDir = 1
-  }
-  void loadTableData(tab, true, 'discard')
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, true, guard, () => {
+    if (tab.sortCol === colName) tab.sortDir = tab.sortDir === 1 ? -1 : 1
+    else {
+      tab.sortCol = colName
+      tab.sortDir = 1
+    }
+  })
 }
 
 function hasNextPage(tab: WorkTab): boolean {
@@ -657,25 +695,31 @@ function hasNextPage(tab: WorkTab): boolean {
 }
 
 async function nextPage(tab: WorkTab) {
-  if (!(await guardPendingTabs([tab]))) return
-  tab.page++
-  void loadTableData(tab, false, 'discard')
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, false, guard, () => {
+    tab.page++
+  })
 }
 
 async function prevPage(tab: WorkTab) {
   if (tab.page === 0) return
-  if (!(await guardPendingTabs([tab]))) return
-  tab.page--
-  void loadTableData(tab, false, 'discard')
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, false, guard, () => {
+    tab.page--
+  })
 }
 
 // 页大小：先确认再改值；取消时下拉框仍显示原值（:value 绑定）
 async function changePageSize(tab: WorkTab, size: number | null) {
   if (size == null || size === tab.pageSize) return
-  if (!(await guardPendingTabs([tab]))) return
-  tab.pageSize = size
-  tab.page = 0
-  void loadTableData(tab, false, 'discard')
+  const guard = await guardPendingTabs([tab])
+  if (!guard.ok) return
+  await reloadAfterGuard(tab, false, guard, () => {
+    tab.pageSize = size
+    tab.page = 0
+  })
 }
 
 function gotoStructure(tab: WorkTab) {
@@ -700,9 +744,9 @@ async function runQueryTab(tab: WorkTab) {
       message.info(t('db.zeroRows'))
     }
   } catch (e) {
-    tab.error = String(e)
+    tab.error = serviceErrorText(e)
     tab.result = null
-    message.error(String(e))
+    message.error(serviceErrorText(e))
   } finally {
     tab.loading = false
   }
@@ -807,13 +851,13 @@ function exportCSV(tab: WorkTab) {
 // DDL 可能改变列定义，旧的行/列快照之后无法安全应用。
 async function loadDDL(tab: WorkTab): Promise<boolean> {
   const dataTab = dataTabFor(tab.connId, tab.database, tab.table)
-  if (!(await guardPendingTabs(dataTab ? [dataTab] : []))) return false
+  if (!(await guardPendingTabs(dataTab ? [dataTab] : [])).ok) return false
   try {
     tab.ddl = await DBShowCreateTable(tab.connId, tab.database, tab.table)
     tab.showDDL = true
     return true
   } catch (e) {
-    message.error(String(e))
+    message.error(serviceErrorText(e))
     return false
   }
 }
@@ -890,7 +934,7 @@ function buildColumnSQL(
 async function runDDL(tab: WorkTab, sql: string) {
   // 执行 DDL 前先处理同表数据标签的 pending：列被改/删后旧修改无法应用
   const dataTab = dataTabFor(tab.connId, tab.database, tab.table)
-  if (!(await guardPendingTabs(dataTab ? [dataTab] : []))) return
+  if (!(await guardPendingTabs(dataTab ? [dataTab] : [])).ok) return
   dialog.warning({
     title: t('db.confirmDDL'),
     content: () => h('pre', { class: 'ddl-preview' }, sql),
@@ -908,7 +952,7 @@ async function runDDL(tab: WorkTab, sql: string) {
           if (list) tablesByDb[tab.database] = list
         }
       } catch (e) {
-        message.error(String(e))
+        message.error(serviceErrorText(e))
       } finally {
         tab.loading = false
       }
@@ -1012,7 +1056,7 @@ async function loadRedisMore(reset = false) {
     redisKeys.value = [...redisKeys.value, ...(page.keys ?? [])]
     redisCursor.value = page.cursor
   } catch (e) {
-    message.error(String(e))
+    message.error(serviceErrorText(e))
   } finally {
     redisLoading.value = false
   }
@@ -1116,7 +1160,7 @@ async function selectKey(k: models.db.KeyInfo) {
     editValue.value = redisValue.value.str ?? ''
     editingValue.value = false
   } catch (e) {
-    message.error(String(e))
+    message.error(serviceErrorText(e))
     redisValue.value = null
   }
 }
@@ -1128,7 +1172,7 @@ async function saveTTL() {
     message.success(t('common.saved'))
     await refreshSelected()
   } catch (e) {
-    message.error(String(e))
+    message.error(serviceErrorText(e))
   }
 }
 
@@ -1141,7 +1185,7 @@ async function deleteKey() {
     redisKeys.value = redisKeys.value.filter((k) => k.key !== key)
     message.success(t('common.saved'))
   } catch (e) {
-    message.error(String(e))
+    message.error(serviceErrorText(e))
   }
 }
 
@@ -1153,7 +1197,7 @@ async function saveStringValue() {
     editingValue.value = false
     await refreshSelected()
   } catch (e) {
-    message.error(String(e))
+    message.error(serviceErrorText(e))
   }
 }
 
@@ -1193,12 +1237,20 @@ const typeColors: Record<string, string> = {
 
 // ---------- 连接切换时重置 ----------
 
-// 注意：watch(activeId) 会清空全部标签（包括待提交修改）。
-// 所有用户触发的切换都必须先经过 selectConn() 的确认；
-// 这里再兜底打一条日志，方便发现未来新增的未保护赋值点。
+// watch(activeId) 只作为防御：所有用户触发的切换必须先经过 selectConn() 的确认。
+// 若未来新增了未保护的 activeId 赋值点，这里拒绝清空并回退，避免静默丢 pending。
+let revertingActiveId = false
 watch(activeId, (next, prev) => {
-  if (prev && next !== prev && pendingCount() > 0) {
-    console.warn('[db] connection switched while pending edits existed; tabs cleared')
+  if (revertingActiveId) {
+    revertingActiveId = false
+    return
+  }
+  if (shouldBlockUnguardedSwitch(prev ?? '', next, pendingCount())) {
+    console.error('[db] blocked unguarded connection switch with pending edits')
+    message.error(t('db.pendingSwitchBlocked'))
+    revertingActiveId = true
+    activeId.value = prev
+    return
   }
   databases.value = []
   Object.keys(tablesByDb).forEach((k) => delete tablesByDb[k])
@@ -1236,7 +1288,7 @@ watch(activeId, (next, prev) => {
 // 注册/注销视图切换守卫：切到终端视图会卸载本组件，必须在卸载前确认
 onMounted(() => {
   if (!viewGuard) return
-  viewGuard.fn = () => guardPendingTabs(dataTabsWithPending())
+  viewGuard.fn = async () => (await guardPendingTabs(dataTabsWithPending())).ok
 })
 onBeforeUnmount(() => {
   if (viewGuard) viewGuard.fn = null
@@ -1445,8 +1497,11 @@ void load()
           </div>
 
           <div class="result">
-            <div v-if="activeTab.error" class="query-error">{{ activeTab.error }}</div>
-            <template v-else-if="activeTab.result && (activeTab.result.columns?.length ?? 0) > 0">
+            <div v-if="activeTab.error" class="query-error">
+              {{ activeTab.error }}
+              <span v-if="activeTab.result" class="hint">· {{ t('db.showingStaleResult') }}</span>
+            </div>
+            <template v-if="activeTab.result && (activeTab.result.columns?.length ?? 0) > 0">
               <div class="result-meta">
                 {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
                 <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
@@ -1502,7 +1557,7 @@ void load()
                 </table>
               </div>
             </template>
-            <div v-else class="result-empty">
+            <div v-else-if="!activeTab.error" class="result-empty">
               <div class="empty-glyph">{{ activeTab.loading ? '◌' : '▤' }}</div>
               <div>{{ activeTab.loading ? t('db.loadingData') : t('db.noData') }}</div>
             </div>

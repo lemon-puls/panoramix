@@ -343,23 +343,10 @@ type RowUpdate struct {
 // maxRowUpdates 单次批量更新上限，避免一次请求锁住长事务
 const maxRowUpdates = 1000
 
-// 稳定错误码：前端按 "code: message" 解析，不依赖英文消息文本。
-const (
-	errCodeInvalidUpdate  = "invalid_update"
-	errCodeTooManyUpdates = "too_many_updates"
-	errCodeUnknownColumn  = "unknown_column"
-	errCodePKMismatch     = "pk_mismatch"
-	errCodeMetadataFailed = "metadata_failed"
-	errCodeUpdateFailed   = "update_failed"
-)
-
-// ErrCodeDBManagerNotReady 是 app 层可复用的稳定错误码
-const ErrCodeDBManagerNotReady = "db_not_ready"
-
 // codedError 构造带稳定错误码的错误（格式：code: message）。
 // message 里只允许出现表名/列名等标识符，严禁拼接单元格值。
 func codedError(code, format string, args ...any) error {
-	return fmt.Errorf("%s: %s", code, fmt.Sprintf(format, args...))
+	return queryErrf(code, format, args...)
 }
 
 // sortedStringKeys 返回 map 的有序键（生成 SQL / 错误消息时保持确定性）
@@ -389,13 +376,13 @@ func buildRowUpdateSQL(database, table string, u RowUpdate) (string, []any, erro
 	database = strings.TrimSpace(database)
 	table = strings.TrimSpace(table)
 	if database == "" || table == "" {
-		return "", nil, codedError(errCodeInvalidUpdate, "database and table are required")
+		return "", nil, codedError(ErrCodeApplyEditsFailed, "database and table are required")
 	}
 	if len(u.Set) == 0 {
-		return "", nil, codedError(errCodeInvalidUpdate, "no columns to update")
+		return "", nil, codedError(ErrCodeApplyEditsFailed, "no columns to update")
 	}
 	if len(u.PK) == 0 {
-		return "", nil, codedError(errCodePKMismatch, "primary key is required")
+		return "", nil, codedError(ErrCodeApplyEditsFailed, "primary key is required")
 	}
 
 	// map 遍历顺序随机；排序列名让生成 SQL 稳定、可断言、便于日志排查
@@ -446,38 +433,38 @@ func nullableArg(v *string) any {
 // 会生成范围过宽的 WHERE，一次更新多行（QA 已在真实 MySQL 8.4 复现）。
 func validateRowUpdates(columns, pkColumns map[string]bool, updates []RowUpdate) error {
 	if len(updates) > maxRowUpdates {
-		return codedError(errCodeTooManyUpdates, "got %d row updates, max %d", len(updates), maxRowUpdates)
+		return codedError(ErrCodeTooManyEdits, "got %d row updates, max %d", len(updates), maxRowUpdates)
 	}
 	if len(pkColumns) == 0 {
-		return codedError(errCodePKMismatch, "table has no primary key")
+		return codedError(ErrCodeApplyEditsFailed, "table has no primary key")
 	}
 	tablePK := sortedBoolKeys(pkColumns)
 	for i, u := range updates {
 		n := i + 1
 		if len(u.Set) == 0 {
-			return codedError(errCodeInvalidUpdate, "update #%d has no columns to set", n)
+			return codedError(ErrCodeApplyEditsFailed, "update #%d has no columns to set", n)
 		}
 		if len(u.PK) == 0 {
-			return codedError(errCodePKMismatch, "update #%d has an empty primary key", n)
+			return codedError(ErrCodeApplyEditsFailed, "update #%d has an empty primary key", n)
 		}
 		// 先判断列是否存在，避免把“拼错列名”误报成主键不匹配
 		for _, col := range sortedStringKeys(u.PK) {
 			if !columns[col] {
-				return codedError(errCodeUnknownColumn, "update #%d: primary key column %q does not exist", n, col)
+				return codedError(ErrCodeApplyEditsFailed, "update #%d: primary key column %q does not exist", n, col)
 			}
 		}
 		for _, col := range sortedStringKeys(u.Set) {
 			if !columns[col] {
-				return codedError(errCodeUnknownColumn, "update #%d: column %q does not exist", n, col)
+				return codedError(ErrCodeApplyEditsFailed, "update #%d: column %q does not exist", n, col)
 			}
 		}
 		for _, col := range sortedStringKeys(u.PK) {
 			if !pkColumns[col] {
-				return codedError(errCodePKMismatch, "update #%d: column %q is not a primary key column", n, col)
+				return codedError(ErrCodeApplyEditsFailed, "update #%d: column %q is not a primary key column", n, col)
 			}
 		}
 		if len(u.PK) != len(pkColumns) {
-			return codedError(errCodePKMismatch,
+			return codedError(ErrCodeApplyEditsFailed,
 				"update #%d: primary key columns mismatch (table: %s; got: %s)",
 				n, strings.Join(tablePK, ","), strings.Join(sortedStringKeys(u.PK), ","))
 		}
@@ -491,13 +478,13 @@ func loadTableColumns(ctx context.Context, db *sql.DB, database, table string) (
 	q := "SHOW FULL COLUMNS FROM " + quoteIdent(database) + "." + quoteIdent(table)
 	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
-		return nil, nil, codedError(errCodeMetadataFailed, "show full columns: %v", err)
+		return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "show full columns: %v", err)
 	}
 	defer rows.Close()
 
 	cols, err := rows.Columns()
 	if err != nil {
-		return nil, nil, codedError(errCodeMetadataFailed, "columns: %v", err)
+		return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "columns: %v", err)
 	}
 	fieldIdx, keyIdx := -1, -1
 	for i, c := range cols {
@@ -509,7 +496,7 @@ func loadTableColumns(ctx context.Context, db *sql.DB, database, table string) (
 		}
 	}
 	if fieldIdx < 0 || keyIdx < 0 {
-		return nil, nil, codedError(errCodeMetadataFailed, "unexpected SHOW FULL COLUMNS result")
+		return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "unexpected SHOW FULL COLUMNS result")
 	}
 
 	all := map[string]bool{}
@@ -521,7 +508,7 @@ func loadTableColumns(ctx context.Context, db *sql.DB, database, table string) (
 	}
 	for rows.Next() {
 		if err := rows.Scan(ptrs...); err != nil {
-			return nil, nil, codedError(errCodeMetadataFailed, "scan: %v", err)
+			return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "scan: %v", err)
 		}
 		name := valueString(vals[fieldIdx])
 		if name == "" {
@@ -533,7 +520,7 @@ func loadTableColumns(ctx context.Context, db *sql.DB, database, table string) (
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, codedError(errCodeMetadataFailed, "rows: %v", err)
+		return nil, nil, codedError(ErrCodeTableMetadataUnavailable, "rows: %v", err)
 	}
 	return all, pks, nil
 }
@@ -552,7 +539,7 @@ func valueString(v any) string {
 func applyRowUpdates(ctx context.Context, db *sql.DB, database, table string, updates []RowUpdate) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, codedError(errCodeUpdateFailed, "begin transaction: %v", err)
+		return 0, codedError(ErrCodeApplyEditsFailed, "begin transaction: %v", err)
 	}
 	// 提交成功后 Rollback 返回 ErrTxDone，忽略即可
 	defer func() { _ = tx.Rollback() }()
@@ -564,12 +551,12 @@ func applyRowUpdates(ctx context.Context, db *sql.DB, database, table string, up
 			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-			return 0, codedError(errCodeUpdateFailed, "update #%d: %v", i+1, err)
+			return 0, codedError(ErrCodeApplyEditsFailed, "update #%d: %v", i+1, err)
 		}
 		applied++
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, codedError(errCodeUpdateFailed, "commit: %v", err)
+		return 0, codedError(ErrCodeApplyEditsFailed, "commit: %v", err)
 	}
 	return applied, nil
 }
@@ -580,7 +567,7 @@ func updateRowsOnDB(ctx context.Context, db *sql.DB, database, table string, upd
 	database = strings.TrimSpace(database)
 	table = strings.TrimSpace(table)
 	if database == "" || table == "" {
-		return 0, codedError(errCodeInvalidUpdate, "database and table are required")
+		return 0, codedError(ErrCodeApplyEditsFailed, "database and table are required")
 	}
 	columns, pkColumns, err := loadTableColumns(ctx, db, database, table)
 	if err != nil {
@@ -600,14 +587,14 @@ func (m *Manager) UpdateRows(c store.DBConn, password, database, table string, u
 		return 0, nil
 	}
 	if len(updates) > maxRowUpdates {
-		return 0, codedError(errCodeTooManyUpdates, "got %d row updates, max %d", len(updates), maxRowUpdates)
+		return 0, codedError(ErrCodeTooManyEdits, "got %d row updates, max %d", len(updates), maxRowUpdates)
 	}
 	if strings.TrimSpace(database) == "" || strings.TrimSpace(table) == "" {
-		return 0, codedError(errCodeInvalidUpdate, "database and table are required")
+		return 0, codedError(ErrCodeApplyEditsFailed, "database and table are required")
 	}
 	db, err := m.Open(c, password)
 	if err != nil {
-		return 0, codedError(errCodeUpdateFailed, "open connection: %v", err)
+		return 0, codedError(ErrCodeApplyEditsFailed, "open connection: %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

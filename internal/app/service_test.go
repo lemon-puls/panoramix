@@ -188,7 +188,7 @@ func TestDBUpdateRowsStableErrorCode(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when db manager is not ready")
 	}
-	if !strings.HasPrefix(err.Error(), db.ErrCodeDBManagerNotReady+": ") {
-		t.Fatalf("error %q does not start with %q", err.Error(), db.ErrCodeDBManagerNotReady+": ")
+	if !strings.HasPrefix(err.Error(), db.ErrCodeApplyEditsFailed+": ") {
+		t.Fatalf("error %q does not start with %q", err.Error(), db.ErrCodeApplyEditsFailed+": ")
 	}
 }

@@ -17,6 +17,13 @@ export function countPendingEdits(tabs: { pending: PendingEdit[] }[]): number {
   return tabs.reduce((n, tab) => n + tab.pending.length, 0)
 }
 
+// 连接切换防御：watch(activeId) 只允许在“已保护”的切换后清空标签。
+// 若 prev 非空、目标连接不同且仍有 pending，说明有赋值点绕过了 selectConn，
+// 调用方必须拒绝清空并回退（不弹第二个确认框，避免重复触发）。
+export function shouldBlockUnguardedSwitch(prev: string, next: string, pending: number): boolean {
+  return !!prev && next !== prev && pending > 0
+}
+
 // 按行组装后端 DBUpdateRows 的载荷：
 // - 一行多列合并为一条 update（后端单事务执行）；
 // - 主键值取当前结果行，数据库 NULL 保持 null；
