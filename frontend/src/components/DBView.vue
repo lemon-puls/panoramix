@@ -43,6 +43,7 @@ import {
   defaultOperatorForType,
   familyOfType,
   sameCondition,
+  stripLeadingWhereText,
   type FilterCondition,
   type FilterOp,
 } from './gridFilters'
@@ -111,7 +112,15 @@ async function onSaved() {
 
 async function askDelete(c: models.store.DBConn) {
   // 删除当前连接会清空全部标签；先保护未提交修改
-  if (c.id === activeId.value && !(await guardPendingTabs(dataTabsWithPending())).ok) return
+  if (
+    c.id === activeId.value &&
+    !(await guardPendingTabs(dataTabsWithPending(), {
+      switchConnection: true,
+      tabsToClose: tabs.value.length,
+    })).ok
+  ) {
+    return
+  }
   dialog.warning({
     title: t('tree.deleteTitle'),
     content: t('db.deleteConfirm', { name: c.name }),
@@ -134,7 +143,11 @@ async function askDelete(c: models.store.DBConn) {
 // 不要在其他地方直接给 activeId 赋值（删除连接/首次加载除外，那两条路径没有 pending）。
 async function selectConn(c: models.store.DBConn) {
   if (c.id === activeId.value) return
-  if (!(await guardPendingTabs(dataTabsWithPending())).ok) return
+  const guard = await guardPendingTabs(dataTabsWithPending(), {
+    switchConnection: true,
+    tabsToClose: tabs.value.length,
+  })
+  if (!guard.ok) return
   activeId.value = c.id
 }
 
@@ -535,10 +548,12 @@ async function dropStaleConditions(tab: WorkTab): Promise<boolean> {
   tab.columns = cols
   tab.pkColumns = cols.filter((c) => c.key === 'PRI').map((c) => c.field)
   const names = new Set(cols.map((c) => c.field))
-  const before = tab.conditions.length + tab.conditionsDraft.length
+  const keyOf = (c: FilterCondition) => `${c.column}\u0000${c.op}\u0000${c.value}`
+  const beforeKeys = new Set([...tab.conditions, ...tab.conditionsDraft].map(keyOf))
   tab.conditions = tab.conditions.filter((c) => names.has(c.column))
   tab.conditionsDraft = tab.conditionsDraft.filter((c) => names.has(c.column))
-  const removed = before - (tab.conditions.length + tab.conditionsDraft.length)
+  const afterKeys = new Set([...tab.conditions, ...tab.conditionsDraft].map(keyOf))
+  const removed = [...beforeKeys].filter((k) => !afterKeys.has(k)).length
   let changed = removed > 0
   if (tab.sortCol && !names.has(tab.sortCol)) {
     tab.sortCol = ''
@@ -553,6 +568,7 @@ async function loadTableData(
   resetPage = false,
   intent: LoadIntent = 'plain',
   metadataRetried = false,
+  pageRetried = false,
 ): Promise<boolean> {
   // 单一收口：pending > 0 时普通加载直接拒绝，调用方必须先走确认流程
   if (intent === 'plain' && tab.pending.length > 0) {
@@ -576,6 +592,14 @@ async function loadTableData(
     tab.lastTableSQL = resp.executedSql ?? ''
     tab.pkColumns = tab.columns.filter((c) => c.key === 'PRI').map((c) => c.field)
     tab.metadataError = ''
+    tab.columnsStale = false
+    if (resp.hadLeadingWhere) {
+      // 后端词法层已去掉一个前导 WHERE；同步前端文本，避免每次查询重复提示
+      message.info(t('db.rawWhereStripped'))
+      tab.rawWhere = stripLeadingWhereText(tab.rawWhere)
+      tab.rawWhereDraft = stripLeadingWhereText(tab.rawWhereDraft)
+      tab.rawPrefill = stripLeadingWhereText(tab.rawPrefill)
+    }
     await syncGridPref(tab)
     if (seq !== tab.loadSeq) return false
     tab.gridSortCol = -1
@@ -588,11 +612,16 @@ async function loadTableData(
     tab.error = serviceErrorText(e)
     tab.filterError = e instanceof Error ? e.message : String(e)
     const code = errorCodeOf(e)
+    if (code === 'invalid_page' && tab.page !== 0 && !pageRetried) {
+      tab.page = 0
+      message.info(t('db.err.invalid_page'))
+      return loadTableData(tab, false, 'applied', metadataRetried, true)
+    }
     if (code === 'unknown_column' && !metadataRetried && tab.appliedSource === 'structured') {
       const changed = await dropStaleConditions(tab)
-      if (changed) return loadTableData(tab, false, 'applied', true)
+      if (changed) return loadTableData(tab, false, 'applied', true, pageRetried)
     }
-    if (code === 'table_metadata_unavailable') tab.metadataError = tab.filterError
+    if (code === 'table_metadata_unavailable') tab.metadataError = tab.error
     return false
   } finally {
     if (seq === tab.loadSeq) tab.loading = false
@@ -681,6 +710,8 @@ function openColumnsPanel(tab: WorkTab) {
     message.warning(t('db.colDisabled'))
     return
   }
+  // 两个面板互斥
+  tab.filterPanelOpen = false
   tab.columnsPanelOpen = !tab.columnsPanelOpen
 }
 
@@ -733,7 +764,13 @@ function focusRawInput() {
   nextTick(() => rawInputEl.value?.focus())
 }
 
-function openFilterPanel(tab: WorkTab) {
+function filterButtonTitle(tab: WorkTab): string {
+  if (tab.metadataError) return tab.metadataError
+  if (!(tab.result?.columns?.length)) return t('db.colDisabled')
+  return t('db.filter.title')
+}
+
+function openFilterPanel(tab: WorkTab, focusIndex = 0) {
   if (tab.filterMode === 'raw') {
     focusRawInput()
     return
@@ -753,9 +790,7 @@ function openFilterPanel(tab: WorkTab) {
     }
   }
   tab.filterPanelOpen = true
-  nextTick(() => {
-    document.querySelector<HTMLInputElement>('.grid-filter-value input')?.focus()
-  })
+  focusDraftRow(focusIndex)
 }
 
 function closeFilterPanel(tab: WorkTab) {
@@ -763,8 +798,9 @@ function closeFilterPanel(tab: WorkTab) {
 }
 
 function onDraftChange(tab: WorkTab, draft: FilterCondition[]) {
+  // 只有面板内展开“预览 SQL”时，GridFilterPanel 才会 emit preview；
+  // 这里更新草稿即可，不主动打后端。
   tab.conditionsDraft = draft
-  scheduleStructuredPreview(tab)
 }
 
 function scheduleStructuredPreview(tab: WorkTab) {
@@ -773,32 +809,19 @@ function scheduleStructuredPreview(tab: WorkTab) {
   previewTimers.set(
     tab.id,
     setTimeout(() => {
-      void runPreview(tab, 'structured')
+      void runPreview(tab)
     }, 250),
   )
 }
 
-function scheduleRawPreview(tab: WorkTab) {
-  const old = previewTimers.get(tab.id)
-  if (old) clearTimeout(old)
-  previewTimers.set(
-    tab.id,
-    setTimeout(() => {
-      void runPreview(tab, 'raw')
-    }, 250),
-  )
-}
-
-// 草稿 SQL 预览：固定 page=0（应用筛选后回到第一页），旧响应按序号丢弃
-async function runPreview(tab: WorkTab, mode: 'structured' | 'raw') {
+// 草稿 SQL 预览：固定 page=0（应用筛选后回到第一页），旧响应按序号丢弃。
+// 只在面板展开“预览 SQL”时由 GridFilterPanel 触发，草稿编辑本身不请求后端。
+async function runPreview(tab: WorkTab) {
   const seq = ++tab.filterPreviewSeq
   tab.filterPreviewLoading = true
   tab.filterPreviewError = ''
   try {
-    const q =
-      mode === 'structured'
-        ? buildTableQuery(tab, tab.conditionsDraft, '', 0)
-        : buildTableQuery(tab, [], tab.rawWhereDraft, 0)
+    const q = buildTableQuery(tab, tab.conditionsDraft, '', 0)
     const preview = await DBPreviewTableSQL(tab.connId, q)
     if (seq !== tab.filterPreviewSeq) return
     tab.filterPreviewSql = preview.sql
@@ -862,8 +885,8 @@ async function removeCondition(tab: WorkTab, index: number) {
   })
 }
 
-function editCondition(tab: WorkTab) {
-  openFilterPanel(tab)
+function editCondition(tab: WorkTab, index: number) {
+  openFilterPanel(tab, index)
 }
 
 function onRawInput(tab: WorkTab, value: string) {
@@ -872,7 +895,7 @@ function onRawInput(tab: WorkTab, value: string) {
     tab.appliedSource === 'structured'
       ? value !== tab.rawPrefill
       : value.trim() !== tab.rawWhere.trim()
-  scheduleRawPreview(tab)
+  // 高级输入不自动预览；只有点「预览 SQL」才请求后端
 }
 
 async function applyRaw(tab: WorkTab) {
@@ -884,6 +907,11 @@ async function applyRaw(tab: WorkTab) {
   await reloadAfterGuard(tab, true, guard, () => {
     tab.rawWhere = draft
     tab.appliedSource = 'raw'
+    tab.filterMode = 'raw'
+    // Applied 来源切到 raw 后，结构化条件不再是真相，清空避免工具栏计数陈旧
+    tab.conditions = []
+    tab.conditionsDraft = []
+    tab.conditionsSnapshot = null
     tab.filterDirty = false
     tab.page = 0
   })
@@ -1065,6 +1093,22 @@ function onDataKeydown(e: KeyboardEvent) {
   }
 }
 
+// 弹层在 teleport 容器里，键盘事件不会冒泡到 .data-tab，因此 Esc 用 window 监听
+function onWindowKeydown(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  const tab = activeTab.value
+  if (!tab || tab.kind !== 'data') return
+  if (tab.filterPanelOpen) {
+    tab.filterPanelOpen = false
+    e.preventDefault()
+    return
+  }
+  if (tab.columnsPanelOpen) {
+    tab.columnsPanelOpen = false
+    e.preventDefault()
+  }
+}
+
 // ---------- 单元格 / 列头右键快捷筛选 ----------
 
 type ContextMenuKind = 'cell' | 'header'
@@ -1192,6 +1236,9 @@ const cellMenuOptions = computed(() => {
         disabled: tooLong,
       })
     }
+    if (fam === 'json') {
+      options.push({ label: t('db.cell.jsonWarning'), key: 'hint-json', disabled: true })
+    }
     if (fam === 'numeric' || fam === 'date' || fam === 'enum' || fam === 'text') {
       options.push({
         label: t(db ? 'db.cell.filterDbNe' : 'db.cell.filterNe', { value: shown }),
@@ -1221,7 +1268,10 @@ function focusDraftRow(index: number) {
   nextTick(() => {
     const row = document.querySelectorAll('.grid-filter-row')[index]
     row?.scrollIntoView({ block: 'nearest' })
-    row?.querySelector<HTMLInputElement>('.grid-filter-value input')?.focus()
+    // 优先值输入；NULL 操作符没有值输入框时回退到该行第一个 input
+    const valueInput = row?.querySelector<HTMLInputElement>('.grid-filter-value input')
+    const fallback = row?.querySelector<HTMLInputElement>('input')
+    ;(valueInput ?? fallback)?.focus()
   })
 }
 
@@ -1435,11 +1485,47 @@ function pendingCount(): number {
 // 避免叠出多个确认框或“第二个动作在用户确认前就执行”。
 let pendingGuardOpen = false
 
+interface PendingStats {
+  edits: number
+  rows: number
+  hidden: number
+  tabsWithPending: number
+}
+
+interface PendingGuardOptions {
+  switchConnection?: boolean
+  tabsToClose?: number
+}
+
+function pendingStats(targets: WorkTab[]): PendingStats {
+  let edits = 0
+  let hidden = 0
+  let tabsWithPending = 0
+  const rows = new Set<string>()
+  for (const tab of targets) {
+    if (tab.pending.length === 0) continue
+    tabsWithPending++
+    edits += tab.pending.length
+    const hiddenSet = new Set(tab.hiddenColumns)
+    const columns = tab.result?.columns ?? []
+    for (const p of tab.pending) {
+      rows.add(`${tab.id}:${p.row}`)
+      if (hiddenSet.has(columns[p.col])) hidden++
+    }
+  }
+  return { edits, rows: rows.size, hidden, tabsWithPending }
+}
+
 // 三选一确认框：取消 / 丢弃并继续 / 应用并继续。
+// 切换连接时使用聚合文案与“丢弃并切换 / 全部应用并切换”。
 // Naive UI 的 positive/negative 只有两个按钮，因此用 dialog.create 自定义 action。
-function askPendingDecision(n: number): Promise<PendingDecision> {
+function askPendingDecision(
+  stats: PendingStats,
+  opts: PendingGuardOptions = {},
+): Promise<PendingDecision> {
   if (pendingGuardOpen) return Promise.resolve('cancel')
   pendingGuardOpen = true
+  const switchMode = !!opts.switchConnection
   return new Promise((resolve) => {
     let done = false
     let dlg: { destroy: () => void } | null = null
@@ -1456,15 +1542,40 @@ function askPendingDecision(n: number): Promise<PendingDecision> {
         { size: 'small', type: kind === 'primary' ? 'primary' : 'default', onClick },
         { default: () => text },
       )
+    const summary = switchMode
+      ? t('db.pendingGuard.switchSummary', {
+          tabs: opts.tabsToClose ?? 0,
+          pendingTabs: stats.tabsWithPending,
+          edits: stats.edits,
+        })
+      : t('db.pendingGuard.summary', { edits: stats.edits, rows: stats.rows })
     dlg = dialog.create({
       type: 'warning',
-      title: t('db.pendingTitle'),
-      content: () => h('div', t('db.pendingDiscard', { n })),
+      title: t('db.pendingGuard.title'),
+      content: () =>
+        h('div', [
+          h('div', summary),
+          stats.hidden > 0
+            ? h(
+                'div',
+                { style: 'color: var(--warning); margin-top: 6px' },
+                t('db.pendingGuard.hidden', { hidden: stats.hidden }),
+              )
+            : null,
+        ]),
       action: () =>
         h('div', { style: 'display:flex;justify-content:flex-end;gap:8px;margin-top:16px' }, [
           button(t('common.cancel'), 'default', () => finish('cancel')),
-          button(t('db.pendingDiscardAction'), 'default', () => finish('discard')),
-          button(t('db.pendingApplyContinue'), 'primary', () => finish('apply')),
+          button(
+            switchMode ? t('db.pendingGuard.discardSwitch') : t('db.pendingGuard.discard'),
+            'default',
+            () => finish('discard'),
+          ),
+          button(
+            switchMode ? t('db.pendingGuard.applySwitch') : t('db.pendingGuard.apply'),
+            'primary',
+            () => finish('apply'),
+          ),
         ]),
       closable: false,
       maskClosable: false,
@@ -1474,10 +1585,13 @@ function askPendingDecision(n: number): Promise<PendingDecision> {
   })
 }
 
-async function decidePending(targets: WorkTab[]): Promise<PendingDecision> {
-  const withPending = targets.filter((tab) => tab.pending.length > 0)
-  if (withPending.length === 0) return 'proceed'
-  return askPendingDecision(countPendingEdits(withPending))
+async function decidePending(
+  targets: WorkTab[],
+  opts: PendingGuardOptions = {},
+): Promise<PendingDecision> {
+  const stats = pendingStats(targets)
+  if (stats.edits === 0) return 'proceed'
+  return askPendingDecision(stats, opts)
 }
 
 // 丢弃 pending：只清界面状态，不碰数据库
@@ -1523,9 +1637,17 @@ async function persistEdits(tab: WorkTab): Promise<boolean> {
 }
 
 async function persistPendingTabs(targets: WorkTab[]): Promise<boolean> {
+  let applied = 0
+  let failed = 0
   for (const tab of targets) {
     if (tab.pending.length === 0) continue
-    if (!(await persistEdits(tab))) return false
+    if (await persistEdits(tab)) applied++
+    else failed++
+  }
+  if (failed > 0) {
+    // 跨标签按标签事务：已成功的已落库并清空 pending，失败标签保留 pending
+    message.error(t('db.pendingGuard.partial', { applied, failed }))
+    return false
   }
   return true
 }
@@ -1537,8 +1659,11 @@ interface GuardOutcome {
   applied: boolean
 }
 
-async function guardPendingTabs(targets: WorkTab[]): Promise<GuardOutcome> {
-  const decision = await decidePending(targets)
+async function guardPendingTabs(
+  targets: WorkTab[],
+  opts: PendingGuardOptions = {},
+): Promise<GuardOutcome> {
+  const decision = await decidePending(targets, opts)
   if (decision === 'cancel') return { ok: false, applied: false }
   if (decision === 'apply') {
     const ok = await persistPendingTabs(targets)
@@ -1862,6 +1987,11 @@ async function runDDL(tab: WorkTab, sql: string) {
         if (active.value) {
           const list = await DBListTables(active.value.id, tab.database).catch(() => null)
           if (list) tablesByDb[tab.database] = list
+        }
+        // 结构变更后列元数据过期：切到数据标签时强制重查并重新求交隐藏列
+        if (dataTab) {
+          dataTab.columnsStale = true
+          dataTab.columnsPrefLoaded = false
         }
       } catch (e) {
         message.error(serviceErrorText(e))
@@ -2199,11 +2329,21 @@ watch(activeId, (next, prev) => {
 
 // 注册/注销视图切换守卫：切到终端视图会卸载本组件，必须在卸载前确认
 onMounted(() => {
+  window.addEventListener('keydown', onWindowKeydown)
   if (!viewGuard) return
   viewGuard.fn = async () => (await guardPendingTabs(dataTabsWithPending())).ok
 })
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onWindowKeydown)
   if (viewGuard) viewGuard.fn = null
+})
+
+// 结构标签执行 DDL 后，同表数据标签标记 columnsStale；首次激活时强制重查
+watch(activeTabId, () => {
+  const tab = activeTab.value
+  if (tab && tab.kind === 'data' && tab.columnsStale && !tab.loading) {
+    void reloadTableData(tab)
+  }
 })
 
 void load()
@@ -2365,19 +2505,22 @@ void load()
               placement="bottom-start"
               :show-arrow="false"
               raw
+              @clickoutside="closeFilterPanel(activeTab)"
             >
               <template #trigger>
                 <n-button
                   size="small"
                   class="grid-filter-trigger"
                   :class="{ active: activeTab.filterMode === 'raw' || filterCount(activeTab) > 0 }"
-                  :disabled="!!activeTab.metadataError"
-                  :title="activeTab.metadataError || t('db.filter.title')"
+                  :disabled="!!activeTab.metadataError || !(activeTab.result?.columns?.length)"
+                  :title="filterButtonTitle(activeTab)"
                   @click="openFilterPanel(activeTab)"
                 >
-                  {{ filterCount(activeTab)
-                    ? t('db.filterButtonCount', { n: filterCount(activeTab) })
-                    : t('db.filterButton') }}
+                  {{ activeTab.filterMode === 'raw'
+                    ? t('db.advancedWhere')
+                    : filterCount(activeTab)
+                      ? t('db.filterButtonCount', { n: filterCount(activeTab) })
+                      : t('db.filterButton') }}
                 </n-button>
               </template>
               <GridFilterPanel
@@ -2408,6 +2551,7 @@ void load()
               placement="bottom-start"
               :show-arrow="false"
               raw
+              @clickoutside="activeTab.columnsPanelOpen = false"
             >
               <template #trigger>
                 <n-button
@@ -2510,7 +2654,7 @@ void load()
             @remove="removeCondition(activeTab, $event)"
             @clear="clearFilter(activeTab)"
             @add="openFilterPanel(activeTab)"
-            @edit="editCondition(activeTab)"
+            @edit="editCondition(activeTab, $event)"
           />
 
           <div v-if="activeTab.filterMode === 'raw'" class="grid-raw-wrap">
@@ -2536,9 +2680,11 @@ void load()
               </n-button>
             </div>
             <div class="grid-raw-hint">{{ t('db.rawHint') }}</div>
+            <div v-if="activeTab.filterError" class="grid-raw-error">{{ activeTab.filterError }}</div>
           </div>
 
           <div class="result">
+            <div v-if="activeTab.loading" class="grid-progress"><div class="grid-progress-bar" /></div>
             <div v-if="activeTab.error" class="query-error">
               {{ activeTab.error }}
               <span v-if="activeTab.result" class="hint">· {{ t('db.showingStaleResult') }}</span>
@@ -2547,7 +2693,11 @@ void load()
               v-if="activeTab.result && (activeTab.result.columns?.length ?? 0) > 0 && (activeTab.result.rows?.length ?? 0) > 0"
             >
               <div class="result-meta">
-                {{ activeTab.result.rows?.length ?? 0 }} {{ t('db.rows') }} · {{ activeTab.result.durationMs }}ms
+                <span v-if="activeTab.loading" class="grid-loading-label">{{ t('db.filtering') }}</span>
+                <span v-else>
+                  {{ t('db.pageRows', { n: activeTab.result.rows?.length ?? 0 }) }} ·
+                  {{ activeTab.result.durationMs }}ms
+                </span>
                 <span v-if="activeTab.result.truncated" class="warn">· {{ t('db.truncated') }}</span>
                 <span class="spacer" />
                 <n-button size="tiny" quaternary :disabled="!activeTab.lastTableSQL" @click="showExecutedSQL(activeTab)">
@@ -2555,7 +2705,7 @@ void load()
                 </n-button>
                 <span class="hint">{{ t('db.gridHint') }}</span>
               </div>
-              <div class="grid-wrap">
+              <div class="grid-wrap" :class="{ 'grid-stale': activeTab.loading }">
                 <table class="grid">
                   <thead>
                     <tr>
@@ -3402,6 +3552,38 @@ void load()
 .grid-raw-hint {
   color: var(--text-muted);
   font-size: 11px;
+}
+.grid-raw-error {
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.grid-progress {
+  height: 2px;
+  background: var(--bg-hover);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.grid-progress-bar {
+  height: 100%;
+  width: 30%;
+  background: var(--accent);
+  animation: grid-progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes grid-progress-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(420%);
+  }
+}
+.grid-stale {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.grid-loading-label {
+  color: var(--accent);
 }
 .grid-sql-viewer {
   margin: 0;

@@ -8,6 +8,7 @@ import {
   opNeedsValue,
   operatorsForType,
   sameCondition,
+  stripLeadingWhereText,
   validateConditionValue,
 } from './gridFilters'
 
@@ -98,5 +99,19 @@ describe('cloneConditions / sameCondition', () => {
     const a = { column: 'name', op: 'eq' as const, value: 'x' }
     expect(sameCondition(a, { ...a })).toBe(true)
     expect(sameCondition(a, { ...a, value: 'y' })).toBe(false)
+  })
+})
+
+describe('stripLeadingWhereText', () => {
+  it('strips exactly one leading WHERE', () => {
+    expect(stripLeadingWhereText("WHERE status = 'paid'")).toBe("status = 'paid'")
+    expect(stripLeadingWhereText("  where   status = 1")).toBe('status = 1')
+    expect(stripLeadingWhereText('WHERE WHERE x = 1')).toBe('WHERE x = 1')
+  })
+
+  it('does not strip identifiers or non-WHERE text', () => {
+    expect(stripLeadingWhereText('`where` = 1')).toBe('`where` = 1')
+    expect(stripLeadingWhereText("status = 'where x'")).toBe("status = 'where x'")
+    expect(stripLeadingWhereText('')).toBe('')
   })
 })

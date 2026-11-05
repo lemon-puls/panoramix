@@ -110,6 +110,12 @@ function togglePreview() {
   if (previewOpen.value) emit('preview', props.draft)
 }
 
+// Ctrl/Cmd+Enter 应用；有行内错误或查询中时不触发
+function emitApply() {
+  if (props.loading || hasError.value || props.columns.length === 0) return
+  emit('apply')
+}
+
 function valuePlaceholder(index: number): string {
   const col = props.columns.find((c) => c.field === props.draft[index]?.column)
   if (col && ['date', 'datetime', 'timestamp'].includes((col.type ?? '').toLowerCase().split('(')[0])) {
@@ -120,7 +126,11 @@ function valuePlaceholder(index: number): string {
 </script>
 
 <template>
-  <div class="grid-filter-panel">
+  <div
+    class="grid-filter-panel"
+    @keydown.ctrl.enter.prevent="emitApply"
+    @keydown.meta.enter.prevent="emitApply"
+  >
     <div class="grid-filter-head">
       <span>{{ t('db.filter.title') }}</span>
       <span class="grid-filter-hint">{{ t('db.filter.andHint') }} · {{ t('db.filter.maxHint') }}</span>

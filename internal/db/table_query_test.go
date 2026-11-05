@@ -309,7 +309,21 @@ func TestValidateAndBuildRawWhere(t *testing.T) {
 	if built.Where != "status = 'paid' OR amount > 100" {
 		t.Fatalf("Where = %q", built.Where)
 	}
+	if !built.HadLeadingWhere {
+		t.Fatal("HadLeadingWhere should be true for a leading WHERE")
+	}
 	if len(built.Args) != 2 {
 		t.Fatalf("raw args should only be LIMIT/OFFSET: %#v", built.Args)
+	}
+
+	// 没有前导 WHERE 时不标记
+	built, err = validateAndBuild(testColumns(), TableQuery{
+		Database: "app", Table: "t", RawWhere: "status = 'paid'", PageSize: 100,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if built.HadLeadingWhere {
+		t.Fatal("HadLeadingWhere should be false without leading WHERE")
 	}
 }

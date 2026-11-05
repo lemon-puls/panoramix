@@ -99,3 +99,11 @@ export function sameCondition(a: FilterCondition, b: FilterCondition): boolean {
 export function cloneConditions(list: FilterCondition[]): FilterCondition[] {
   return list.map((c) => ({ column: c.column, op: c.op, value: c.value }))
 }
+
+// 去掉恰好一个前导 WHERE（与后端 analyzeRawWhere 的语义一致）。
+// 仅用于后端返回 hadLeadingWhere 后同步前端展示文本。
+export function stripLeadingWhereText(raw: string): string {
+  const trimmed = raw.trimStart()
+  if (!/^where(\s|$)/i.test(trimmed)) return raw
+  return trimmed.replace(/^where\s*/i, '')
+}

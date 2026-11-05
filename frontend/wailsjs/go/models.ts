@@ -592,6 +592,7 @@ export namespace db {
 	    sql: string;
 	    where: string;
 	    paramCount: number;
+	    hadLeadingWhere: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new TableQueryPreview(source);
@@ -602,12 +603,14 @@ export namespace db {
 	        this.sql = source["sql"];
 	        this.where = source["where"];
 	        this.paramCount = source["paramCount"];
+	        this.hadLeadingWhere = source["hadLeadingWhere"];
 	    }
 	}
 	export class TableDataResponse {
 	    result: Result;
 	    columns: ColumnInfo[];
 	    executedSql: string;
+	    hadLeadingWhere: boolean;
 
 	    static createFrom(source: any = {}) {
 	        return new TableDataResponse(source);
@@ -618,6 +621,7 @@ export namespace db {
 	        this.result = this.convertValues(source["result"], Result);
 	        this.columns = this.convertValues(source["columns"], ColumnInfo);
 	        this.executedSql = source["executedSql"];
+	        this.hadLeadingWhere = source["hadLeadingWhere"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

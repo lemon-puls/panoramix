@@ -98,24 +98,27 @@ type TableQuery struct {
 
 // TableQueryPreview 可读 SQL 预览（值已内联）
 type TableQueryPreview struct {
-	SQL        string `json:"sql"`
-	Where      string `json:"where"` // 不含 WHERE 关键字，用于模式切换预填
-	ParamCount int    `json:"paramCount"`
+	SQL             string `json:"sql"`
+	Where           string `json:"where"` // 不含 WHERE 关键字，用于模式切换预填
+	ParamCount      int    `json:"paramCount"`
+	HadLeadingWhere bool   `json:"hadLeadingWhere"`
 }
 
 // TableDataResponse 数据标签查询结果（列元数据与结果同一次返回）
 type TableDataResponse struct {
-	Result      *Result      `json:"result"`
-	Columns     []ColumnInfo `json:"columns"`
-	ExecutedSQL string       `json:"executedSql"`
+	Result          *Result      `json:"result"`
+	Columns         []ColumnInfo `json:"columns"`
+	ExecutedSQL     string       `json:"executedSql"`
+	HadLeadingWhere bool         `json:"hadLeadingWhere"`
 }
 
 // builtQuery 同时产出执行 SQL、参数与可读 SQL
 type builtQuery struct {
-	SQL     string
-	Args    []any
-	Preview string
-	Where   string
+	SQL             string
+	Args            []any
+	Preview         string
+	Where           string
+	HadLeadingWhere bool
 }
 
 // columnFamily 列类型族（只看 SHOW FULL COLUMNS 的 Type 前缀）
@@ -426,16 +429,18 @@ func validateAndBuild(cols []ColumnInfo, q TableQuery) (*builtQuery, error) {
 
 	whereSQL := strings.Join(whereParts, " AND ")
 	wherePreview := strings.Join(previewParts, " AND ")
+	hadLeadingWhere := false
 	if rawWhere != "" {
 		if utf8.RuneCountInString(rawWhere) > maxRawWhere {
 			return nil, queryErrf(ErrCodeRawWhereTooLong, "raw WHERE exceeds %d characters", maxRawWhere)
 		}
-		normalized, _, err := analyzeRawWhere(rawWhere)
+		normalized, hadWhere, err := analyzeRawWhere(rawWhere)
 		if err != nil {
 			return nil, err
 		}
 		whereSQL = normalized
 		wherePreview = normalized
+		hadLeadingWhere = hadWhere
 	}
 
 	// 排序列必须存在
@@ -483,10 +488,11 @@ func validateAndBuild(cols []ColumnInfo, q TableQuery) (*builtQuery, error) {
 		" LIMIT " + strconv.Itoa(q.PageSize) + " OFFSET " + strconv.FormatInt(offset, 10)
 
 	return &builtQuery{
-		SQL:     sqlText,
-		Args:    args,
-		Preview: preview,
-		Where:   wherePreview,
+		SQL:             sqlText,
+		Args:            args,
+		Preview:         preview,
+		Where:           wherePreview,
+		HadLeadingWhere: hadLeadingWhere,
 	}, nil
 }
 
@@ -513,7 +519,12 @@ func (m *Manager) TableData(c store.DBConn, password string, q TableQuery) (*Tab
 		return nil, err
 	}
 	res.DurationMs = time.Since(start).Milliseconds()
-	return &TableDataResponse{Result: res, Columns: cols, ExecutedSQL: built.Preview}, nil
+	return &TableDataResponse{
+		Result:          res,
+		Columns:         cols,
+		ExecutedSQL:     built.Preview,
+		HadLeadingWhere: built.HadLeadingWhere,
+	}, nil
 }
 
 // PreviewTableSQL 返回与执行路径同一 builder 生成的可读 SQL（不执行）
@@ -534,8 +545,9 @@ func (m *Manager) PreviewTableSQL(c store.DBConn, password string, q TableQuery)
 		return nil, err
 	}
 	return &TableQueryPreview{
-		SQL:        built.Preview,
-		Where:      built.Where,
-		ParamCount: len(built.Args),
+		SQL:             built.Preview,
+		Where:           built.Where,
+		ParamCount:      len(built.Args),
+		HadLeadingWhere: built.HadLeadingWhere,
 	}, nil
 }

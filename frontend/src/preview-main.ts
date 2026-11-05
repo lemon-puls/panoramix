@@ -79,6 +79,12 @@ function previewResultRows(q: any): (string | null)[][] {
   return previewRowsFor(Number(params.get('rows') ?? '0'))
 }
 
+function stripLeadingWhereMock(raw: string): { text: string; had: boolean } {
+  const trimmed = raw.trimStart()
+  if (!/^where(\s|$)/i.test(trimmed)) return { text: raw, had: false }
+  return { text: trimmed.replace(/^where\s*/i, ''), had: true }
+}
+
 function previewWhere(q: any): string {
   const parts: string[] = []
   for (const c of q?.conditions ?? []) {
@@ -114,17 +120,22 @@ function previewWhere(q: any): string {
         break
     }
   }
-  if (q?.rawWhere) parts.push(String(q.rawWhere))
+  const raw = stripLeadingWhereMock(String(q?.rawWhere ?? ''))
+  if (raw.text) parts.push(raw.text)
   return parts.join(' AND ')
 }
 
-function previewTableSQL(q: any): { sql: string; where: string } {
+function previewTableSQL(q: any): { sql: string; where: string; hadLeadingWhere: boolean } {
   const from = `SELECT * FROM \`${q.database}\`.\`${q.table}\``
   const where = previewWhere(q)
   const sort = q.sortColumn ? ` ORDER BY \`${q.sortColumn}\` ${q.sortDesc ? 'DESC' : 'ASC'}` : ''
   const offset = (q.page ?? 0) * (q.pageSize ?? 1000)
   const whereSQL = where ? ` WHERE ${where}` : ''
-  return { sql: `${from}${whereSQL}${sort} LIMIT ${q.pageSize} OFFSET ${offset}`, where }
+  return {
+    sql: `${from}${whereSQL}${sort} LIMIT ${q.pageSize} OFFSET ${offset}`,
+    where,
+    hadLeadingWhere: stripLeadingWhereMock(String(q?.rawWhere ?? '')).had,
+  }
 }
 
 const mockService: Record<string, (...args: any[]) => Promise<any>> = {
@@ -178,9 +189,11 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   DBDescribeTable: async () => previewColumns,
   DBTableData: async (_id: string, q: any) => {
     const w = window as any
-    const { sql } = previewTableSQL(q)
+    const { sql, hadLeadingWhere } = previewTableSQL(q)
     w.__dbQueries = [...(w.__dbQueries ?? []), sql]
     if (w.__dbQueryFail) throw new Error('query timed out')
+    const delayMs = Number(new URLSearchParams(location.search).get('delay_ms') ?? '0')
+    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs))
     return {
       result: {
         columns: previewColumns.map((c) => c.field),
@@ -191,11 +204,14 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
       },
       columns: previewColumns,
       executedSql: sql,
+      hadLeadingWhere,
     }
   },
   DBPreviewTableSQL: async (_id: string, q: any) => {
-    const { sql, where } = previewTableSQL(q)
-    return { sql, where, paramCount: (q.conditions?.length ?? 0) + 2 }
+    const { sql, where, hadLeadingWhere } = previewTableSQL(q)
+    const w = window as any
+    w.__dbPreviews = [...(w.__dbPreviews ?? []), sql]
+    return { sql, where, paramCount: (q.conditions?.length ?? 0) + 2, hadLeadingWhere }
   },
   DBShowCreateTable: async () => 'CREATE TABLE `users` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(64) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;',
   DBTableMeta: async () => ({
