@@ -251,6 +251,8 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
   DBUpdateRows: async (_id: string, db: string, table: string, updates: any[]) => {
     const w = window as any
     w.__dbUpdateCalls = [...(w.__dbUpdateCalls ?? []), { db, table, updates }]
+    // 预览调试开关：模拟后端写入失败（验证“应用失败则中止原操作”）
+    if (w.__dbUpdateFail) throw new Error('update_failed: simulated failure')
     return updates?.length ?? 0
   },
   RedisScanKeys: async () => ({ keys: [
