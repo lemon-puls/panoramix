@@ -192,6 +192,9 @@ const mockService: Record<string, (...args: any[]) => Promise<any>> = {
     const { sql, hadLeadingWhere } = previewTableSQL(q)
     w.__dbQueries = [...(w.__dbQueries ?? []), sql]
     if (w.__dbQueryFail) throw new Error('query timed out')
+    if (String(q?.rawWhere ?? '').includes(';')) {
+      throw new Error('unsafe_raw_where: top-level semicolon')
+    }
     const delayMs = Number(new URLSearchParams(location.search).get('delay_ms') ?? '0')
     if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs))
     return {

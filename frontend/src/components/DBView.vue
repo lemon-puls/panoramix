@@ -610,7 +610,8 @@ async function loadTableData(
     if (seq !== tab.loadSeq) return false
     // 查询失败保留上一次结果，界面用错误 banner 标注“显示的是上一次结果”
     tab.error = serviceErrorText(e)
-    tab.filterError = e instanceof Error ? e.message : String(e)
+    // 行内错误与结果 banner 共用同一份本地化文本（不再直接展示 code: message）
+    tab.filterError = tab.error
     const code = errorCodeOf(e)
     if (code === 'invalid_page' && tab.page !== 0 && !pageRetried) {
       tab.page = 0
@@ -716,6 +717,7 @@ function openColumnsPanel(tab: WorkTab) {
 }
 
 function columnsButtonTitle(tab: WorkTab): string {
+  if (!(tab.result?.columns?.length)) return t('db.colDisabled')
   const hidden = tab.hiddenColumns.length
   return hidden > 0 ? t('db.colButtonHidden', { n: hidden }) : t('db.colButtonHint')
 }
@@ -741,7 +743,7 @@ function toggleSortDirection(tab: WorkTab) {
 // ---------- 结构化筛选 / 高级 WHERE ----------
 
 const rawInputEl = ref<HTMLTextAreaElement | null>(null)
-const sqlViewer = reactive({ show: false, title: '', sql: '' })
+const sqlViewer = reactive({ show: false, title: '', sql: '', note: '' })
 const previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 function filterCount(tab: WorkTab): number {
@@ -965,9 +967,10 @@ function copySQL(sql: string) {
   )
 }
 
-function showSQL(title: string, sql: string) {
+function showSQL(title: string, sql: string, note = '') {
   sqlViewer.title = title
   sqlViewer.sql = sql
+  sqlViewer.note = note
   sqlViewer.show = true
 }
 
@@ -998,7 +1001,10 @@ async function showRawPreview(tab: WorkTab) {
       tab.connId,
       buildTableQuery(tab, [], tab.rawWhereDraft, 0),
     )
-    showSQL(t('db.previewSqlTitle'), preview.sql)
+    const notes: string[] = []
+    if (tab.appliedSource === 'structured') notes.push(t('db.rawPreviewStructuredNote'))
+    if (preview.hadLeadingWhere) notes.push(t('db.rawWhereStripped'))
+    showSQL(t('db.previewSqlTitle'), preview.sql, notes.join(' · '))
   } catch (e) {
     message.error(serviceErrorText(e))
   }
@@ -3195,6 +3201,7 @@ void load()
       :title="sqlViewer.title"
       style="width: min(760px, calc(100vw - 32px))"
     >
+      <div v-if="sqlViewer.note" class="grid-sql-viewer-note">{{ sqlViewer.note }}</div>
       <pre class="grid-sql-viewer">{{ sqlViewer.sql }}</pre>
       <div class="grid-sql-viewer-actions">
         <span class="spacer" />
@@ -3639,6 +3646,12 @@ void load()
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-primary);
+}
+.grid-sql-viewer-note {
+  color: var(--warning);
+  font-size: 11px;
+  margin-bottom: 8px;
+  line-height: 1.5;
 }
 .grid-sql-viewer-actions {
   display: flex;

@@ -258,6 +258,7 @@ export default {
     rawPlaceholder: 'WHERE fragment, e.g. status = 1',
     rawHint: 'Predicate only; no ;, comments, or ORDER BY / GROUP BY / HAVING / LIMIT / OFFSET / UNION',
     rawWhereStripped: 'Leading WHERE was removed automatically',
+    rawPreviewStructuredNote: 'Active source: structured conditions; advanced text is display-only',
     filtering: 'Filtering…',
     pageRows: '{n} row(s) on this page',
     rawApply: 'Apply',

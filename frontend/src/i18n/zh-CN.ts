@@ -257,6 +257,7 @@ export default {
     rawPlaceholder: '筛选条件（WHERE 片段），如 status = 1',
     rawHint: '只填条件；不能包含 ;、注释、ORDER BY / GROUP BY / HAVING / LIMIT / OFFSET / UNION',
     rawWhereStripped: '已自动去掉开头的 WHERE',
+    rawPreviewStructuredNote: '当前执行来源：结构化条件；高级文本仅作展示',
     filtering: '筛选中…',
     pageRows: '本页 {n} 行',
     rawApply: '应用',
