@@ -795,6 +795,22 @@ function openFilterPanel(tab: WorkTab, focusIndex = 0) {
 
 function closeFilterPanel(tab: WorkTab) {
   tab.filterPanelOpen = false
+  // 取消 / Esc / 点外 = 丢弃草稿；下次打开从 Applied 回填
+  tab.conditionsDraft = []
+}
+
+// 筛选 popover 的 clickoutside：
+// - 右键（contextmenu / button=2）不关闭，用户可能正要打开快捷筛选；
+// - 快捷筛选/列菜单 teleport 到 body，菜单项左键的 mouseup 也算 outside，
+//   菜单打开期间或点击发生在菜单内部时忽略；
+// - 只有真正的面板外左键点击才关闭并丢弃草稿。
+function onFilterPopoverClickOutside(e: MouseEvent) {
+  if (e.type === 'contextmenu' || e.button === 2) return
+  if (cellMenu.show) return
+  const target = e.target as HTMLElement | null
+  if (target?.closest?.('.n-dropdown-menu, .n-base-select-menu')) return
+  const tab = activeTab.value
+  if (tab && tab.kind === 'data') closeFilterPanel(tab)
 }
 
 function onDraftChange(tab: WorkTab, draft: FilterCondition[]) {
@@ -849,6 +865,7 @@ async function applyStructured(tab: WorkTab) {
     tab.appliedSource = 'structured'
     tab.filterMode = 'structured'
     tab.filterPanelOpen = false
+    tab.conditionsDraft = []
     tab.filterDirty = false
     tab.page = 0
   })
@@ -927,6 +944,7 @@ async function switchToRaw(tab: WorkTab) {
     tab.rawPrefill = preview.where ?? ''
     tab.rawWhereDraft = tab.rawPrefill
     tab.conditionsSnapshot = cloneConditions(tab.conditions)
+    tab.conditionsDraft = []
     tab.filterMode = 'raw'
     tab.filterDirty = false
     tab.filterPanelOpen = false
@@ -1046,6 +1064,7 @@ async function switchToStructured(tab: WorkTab) {
     tab.rawWhereDraft = ''
     tab.rawPrefill = ''
     tab.conditionsSnapshot = null
+    tab.conditionsDraft = []
     tab.filterDirty = false
     return
   }
@@ -1124,6 +1143,9 @@ const cellMenu = reactive({
   column: '',
   databaseValue: null as string | null,
   hasPending: false,
+  // 打开右键菜单时若筛选面板正在编辑草稿，先快照下来；
+  // 菜单项点击前可能有 clickoutside 等事件改变 filterPanelOpen
+  draftSnapshot: null as FilterCondition[] | null,
 })
 
 const cellMenuTab = computed(() => tabs.value.find((t) => t.id === cellMenu.tabId) ?? null)
@@ -1157,6 +1179,7 @@ function openCellMenu(e: MouseEvent, tab: WorkTab, row: number, col: number) {
   cellMenu.y = e.clientY
   cellMenu.tabId = tab.id
   cellMenu.kind = 'cell'
+  cellMenu.draftSnapshot = tab.filterPanelOpen ? cloneConditions(tab.conditionsDraft) : null
   cellMenu.row = row
   cellMenu.col = col
   cellMenu.column = tab.result?.columns?.[col] ?? ''
@@ -1171,6 +1194,7 @@ function openHeaderMenu(e: MouseEvent, tab: WorkTab, name: string) {
   cellMenu.y = e.clientY
   cellMenu.tabId = tab.id
   cellMenu.kind = 'header'
+  cellMenu.draftSnapshot = tab.filterPanelOpen ? cloneConditions(tab.conditionsDraft) : null
   cellMenu.row = -1
   cellMenu.col = -1
   cellMenu.column = name
@@ -1278,9 +1302,13 @@ function focusDraftRow(index: number) {
 // 快捷筛选只追加到草稿，不自动应用
 function appendQuickCondition(tab: WorkTab, column: string, op: FilterOp, value: string) {
   if (tab.filterMode === 'raw') return
-  const base = tab.filterPanelOpen
-    ? cloneConditions(tab.conditionsDraft)
-    : cloneConditions(tab.conditions)
+  // 优先使用打开菜单时的草稿快照；不依赖此刻的 filterPanelOpen（可能被 clickoutside 改动）
+  const base =
+    cellMenu.draftSnapshot !== null
+      ? cloneConditions(cellMenu.draftSnapshot)
+      : tab.filterPanelOpen && tab.conditionsDraft.length > 0
+        ? cloneConditions(tab.conditionsDraft)
+        : cloneConditions(tab.conditions)
   const cond: FilterCondition = { column, op, value }
   const existing = base.findIndex((c) => sameCondition(c, cond))
   tab.filterMode = 'structured'
@@ -1307,9 +1335,12 @@ function addFilterForColumn(tab: WorkTab, column: string) {
     message.warning(t('db.cell.rawDisabledShort'))
     return
   }
-  const base = tab.filterPanelOpen
-    ? cloneConditions(tab.conditionsDraft)
-    : cloneConditions(tab.conditions)
+  const base =
+    cellMenu.draftSnapshot !== null
+      ? cloneConditions(cellMenu.draftSnapshot)
+      : tab.filterPanelOpen && tab.conditionsDraft.length > 0
+        ? cloneConditions(tab.conditionsDraft)
+        : cloneConditions(tab.conditions)
   if (base.length >= 5) {
     tab.conditionsDraft = base
     tab.filterPanelOpen = true
@@ -1351,10 +1382,18 @@ function hideColumn(tab: WorkTab, name: string) {
   void saveGridPref(tab)
 }
 
+function closeCellMenu() {
+  cellMenu.show = false
+  cellMenu.draftSnapshot = null
+}
+
 function onCellMenuSelect(key: string) {
   cellMenu.show = false
   const tab = cellMenuTab.value
-  if (!tab) return
+  if (!tab) {
+    cellMenu.draftSnapshot = null
+    return
+  }
   const dbValue = cellMenu.databaseValue
   switch (key) {
     case 'filter-eq':
@@ -1397,6 +1436,7 @@ function onCellMenuSelect(key: string) {
       addFilterForColumn(tab, cellMenu.column)
       break
   }
+  cellMenu.draftSnapshot = null
 }
 
 
@@ -2505,7 +2545,7 @@ void load()
               placement="bottom-start"
               :show-arrow="false"
               raw
-              @clickoutside="closeFilterPanel(activeTab)"
+              @clickoutside="onFilterPopoverClickOutside"
             >
               <template #trigger>
                 <n-button
@@ -3146,7 +3186,7 @@ void load()
       :y="cellMenu.y"
       :options="cellMenuOptions"
       @select="onCellMenuSelect"
-      @clickoutside="cellMenu.show = false"
+      @clickoutside="closeCellMenu"
     />
 
     <n-modal
