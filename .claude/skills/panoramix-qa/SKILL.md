@@ -252,3 +252,142 @@ v0.3.2 PR0 实测该缺陷成立（`DBUpdateRows` 无 `SHOW FULL COLUMNS` 校验
   检查页面是否出现「修改已应用；查询失败」提示，而不是只看 toast。
 - 复审不要只看提交说明：错误码名（`too_many_edits` vs `too_many_updates`）
   与设计文档逐字对齐；前端是否真的按 code 映射 i18n 也要单独 grep。
+
+## 八、v0.3.2 PR1（列可见性 / 筛选 / 快捷筛选）验收手法
+
+### 8.1 真实 MySQL 数据的字符集坑（必看）
+
+`docker exec -i ... mysql < data.sql` 默认客户端字符集不是 utf8mb4 时，中文注释与
+数据会被双重编码（`邮箱` → `é‚®ç®±`），随后所有「注释搜索/中文筛选」测试都会
+假失败。加载数据必须加 `--default-character-set=utf8mb4`：
+
+```bash
+docker exec -i panoramix-qa-mysql mysql -uroot -pqa_pass --default-character-set=utf8mb4 qa < /tmp/grid_qa.sql
+```
+
+用 `SELECT HEX(COLUMN_COMMENT)` 验证（`邮箱` = `E982AEE7AEB1`）。另：MySQL 8 不支持
+`IN (SELECT ... LIMIT n)`（错误 1235），设计里的这个验收示例本身不成立；验证
+「子查询内 LIMIT 允许」要用派生表 `IN (SELECT id FROM (SELECT ... LIMIT 5) t)`。
+
+### 8.2 空状态分支的「死代码」检查（本分支抓到）
+
+模板外层若是 `<template v-if="result && result.columns.length > 0">`，那么
+`v-else-if="result.rows.length === 0"` 的空状态永远不可达——真实 SELECT 返回 0 行时
+`scanRows` 仍会带列名。验收必须用「有列、0 行」的结果实测，而不是只看模板文案：
+
+```js
+window.go.app.Service.DBTableData = async () => ({
+  result: { columns: tab.result.columns, rows: [], affected: 0, durationMs: 2, truncated: false },
+  columns: tab.columns, executedSql: '...',
+})
+await s.loadTableData(tab, true, 'discard')
+// 断言 .result-empty 存在；实际是 grid 渲染但 tbody 为 0 行 => 缺陷
+```
+
+同理：`v-else` 里的空状态没有「刷新」按钮也要一并核对。
+
+### 8.3 筛选预览的请求时机
+
+设计要求「预览只在展开时请求」。在页面里覆写并计数：
+
+```js
+let n = 0
+window.go.app.Service.DBPreviewTableSQL = async (...a) => { n++; return orig(...a) }
+s.onDraftChange(tab, [{column:'status',op:'eq',value:'p'}])
+```
+
+若预览折叠时 `n` 仍增长，即每次编辑都打一次后端（真实实现是 `SHOW FULL COLUMNS`），
+属于「修改过程中不查库」的违例。
+
+### 8.4 弹窗 / 面板的可测试断言
+
+- 保护弹窗文案：`dialogText.includes('行')` / `includes('隐藏')`，只看按钮不够；
+  连接切换还应有「会关闭 N 个标签」的聚合文案。
+- Esc / 点外关闭：不要只点「取消」。用
+  `document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`
+  与在弹层外元素上派发 `mousedown`+`click`，断言 `filterPanelOpen/columnsPanelOpen`。
+- 两个 popover 互斥：先开筛选再开列面板，断言不能同时为 true。
+- chip 聚焦：点第 2 个 chip 后，`[...document.querySelectorAll('.grid-filter-row')]
+  .findIndex(r => r.contains(document.activeElement))` 应为 1（本分支实际为 0）。
+- 加载态：`tab.loading=true` 时断言网格 `opacity`、结果元信息是否出现「筛选中」；
+  只断言按钮 disabled 会漏掉视觉反馈缺失。
+
+### 8.5 用 mock 覆写覆盖错误分支
+
+```js
+const orig = window.go.app.Service.DBTableData
+window.go.app.Service.DBTableData = async () => { throw new Error('invalid_page: ...') }
+// 断言 tab.page 是否真的回到 0（i18n 文案写“已重置”时尤其要查）
+window.go.app.Service.DBTableData = orig
+```
+
+- `unknown_column`：覆写 `DBDescribeTable` 删掉一列，断言 `DBTableData` 只重试 1 次、
+  条件被移除、提示出现。注意提示里的「已移除 N 条」会把 Applied 与 Draft 同一条
+  重复计数。
+- `table_metadata_unavailable`：断言筛选按钮禁用、列面板仍可打开；同时检查按钮
+  tooltip 是否把原始 `code: message` 直接露出来（应走 i18n）。
+- 应用成功但重查失败：先 `__dbUpdateFail=false`、再 `__dbQueryFail=true`，点
+  「应用并继续」，断言出现「修改已应用，但刷新数据失败」。
+
+### 8.6 快捷筛选核对清单（按菜单选项断言，不点真实菜单）
+
+`setupState.cellMenuOptions` 可直接断言文案与 `disabled`：
+文本/数值/日期/枚举/JSON/BLOB/NULL 六类各取一个单元格；再断言：
+- pending 单元格标签用「数据库值」且底部有「该单元格有未提交修改」；
+- raw 模式三项 disabled、编辑/复制仍可用；
+- 菜单里是否真的有 JSON 性能/大小写警告（本分支缺失）；
+- 快捷筛选后 `conditions` 不变、`conditionsDraft` 追加、`__dbQueries` 不增长。
+
+### 8.7 列可见性核对清单
+
+- 应用隐藏后 `__dbQueries` 不增长；`GetGridPref` 返回 `{"v":1,"hidden":[...]}`。
+- CSV 用覆写 `URL.createObjectURL` 抓 Blob：`await blob.text()` 断言表头只含可见列、
+  行数 = 当前页。
+- 至少一列：面板逐个取消到只剩一列，再点最后一个 checkbox，断言回弹 + 提示；
+  「清空」在无搜索词时保留第一列。
+- 全部隐藏的持久化值：`SetGridPref` 写入全部列 → `loadTableData` 后应修复为
+  `columns.slice(1)` 并回写。
+- 隐藏列上的 pending：`startEdit(tab,0,7)` 后 `commitEdit`，断言 `DBUpdateRows`
+  载荷的 `set` 仍是原列名（原始索引 7），工具栏出现 `⚠ N 处位于隐藏列`。
+
+### 8.8 存储位置提示
+
+v0.3.2 最终把列偏好从设计稿里的 localStorage 改成了 settings 表
+（`grid.columns.<connId>.<db>.<table>`，绑定 `GetGridPref/SetGridPref/
+DeleteGridPrefsByPrefix`）。设计文档 §3.2.4/§4.2 未同步，验收按 settings 表为准。
+
+### 8.9 复审补充（2026-11-06，4 个修复提交）
+
+- 空状态 mock：预览页支持 `?empty=1`（空表）、`?empty_after_filter=1`（有谓词时 0 行）、
+  `?empty_page=1`（page>0 时 0 行）、`?delay_ms=1200`（慢查询）。三种空状态要分别
+  验证文案与操作按钮，并点「清除筛选 / 回到第一页 / 刷新」确认恢复。
+- 点外关闭必须用**真实鼠标事件**：`Input.dispatchMouseEvent`
+  （mouseMoved/mousePressed/mouseReleased）在面板外坐标点击。合成
+  `mousedown`/`click` 会被 Naive UI 的 clickoutside 漏判，得到假失败。
+- 打开 NSelect 下拉选值（菜单 teleport 到 body）不会触发 popover 的 clickoutside；
+  看到面板仍开 + 草稿列/操作符已变即为通过。
+- 前导 WHERE：预览 mock 会把 `hadLeadingWhere` 回给前端；验证 toast、输入框归一化、
+  刷新不重复提示，以及真实 MySQL 的 `ExecutedSQL` 不出现 `WHERE WHERE`。
+- 行内错误：高级模式把 `filterError` 直接渲染在输入框下方；注意这个字段是原始
+  `code: message`，若结果 banner 已中文而行内仍是英文，属于 i18n 映射遗漏。
+- 查询反馈：`?delay_ms=...` 下抓 `.grid-progress`、`.grid-stale`
+  （opacity/pointer-events）、元信息「筛选中…」；等结束后元信息应为「本页 N 行」。
+- 列面板禁用时标题仍可能是「选择要显示的列」，与设计「数据加载后可用」不一致；
+  属于轻微文案项，不要和“按钮未禁用”混淆。
+
+### 8.10 clickoutside 与 teleport 菜单的交互坑（2026-11-06 第二轮复审）
+
+- popover 加 `@clickoutside` 后，**右键**（button=2）与 **teleport 到 body 的
+  dropdown/select 菜单左键**都会被判定为 outside。验收时必须测：
+  「面板打开 + 未应用草稿 → 右键单元格 → 左键点快捷筛选菜单项」。
+  期望草稿保留；若面板被先关闭、`appendQuickCondition` 以 Applied 为基底，
+  就是草稿丢失回归。
+- 正确做法是先快照：`openCellMenu`/`openHeaderMenu` 时保存 `conditionsDraft`，
+  快捷筛选优先用快照；clickoutside 处理器忽略右键、`cellMenu.show` 与
+  `.n-dropdown-menu/.n-base-select-menu` 内的点击。
+- 该场景必须用真实 `Input.dispatchMouseEvent` 复测；合成 `.click()` 与
+  `new MouseEvent` 的事件顺序/目标与真实不一致，会漏掉或误报。
+- 菜单打开时点真正面板外：第一次点击关菜单、第二次关面板，属可接受行为；
+  只要不是永久卡住。
+- 回归时顺带测「点筛选触发按钮（面板已开且带草稿）」：当前实现会 close+reopen，
+  草稿回填 Applied；设计未定义此交互，可作非阻塞观察记录。
